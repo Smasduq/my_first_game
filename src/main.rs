@@ -23,6 +23,12 @@ fn main() {
                     file_path: "src/assets".into(),
                     ..default()
                 })
+                // rodio logs backend buffer noise as ERROR every hitch;
+                // silence the crate, game audio is unaffected.
+                .set(bevy::log::LogPlugin {
+                    filter: "info,rodio=off".into(),
+                    ..default()
+                })
                 .set(ImagePlugin::default_nearest()),
         )
         .add_plugins((level::LevelPlugin, player::PlayerPlugin, CombatPlugin))
@@ -125,12 +131,12 @@ fn update_status(
     }
     if state.won {
         **t = format!(
-            "Escaped! HP: {:.0}%  Falls: {}  Crows shot: {}",
+            "Escaped! HP: {:.0}%  Falls: {}  Eyes down: {}",
             hp, state.deaths, combat.kills
         );
     } else {
         **t = format!(
-            "Reach the red flag. HP: {:.0}%  Falls: {}  Crows shot: {}  Hits: {}",
+            "Reach the red flag. HP: {:.0}%  Falls: {}  Eyes down: {}  Hits: {}",
             hp, state.deaths, combat.kills, combat.hits
         );
     }

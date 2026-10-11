@@ -132,6 +132,8 @@ fn run_jump_physics(
     input: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     state: Res<LevelState>,
+    audio: Res<AssetServer>,
+    mut commands: Commands,
     mut player: Query<
         (&mut Transform, &mut Velocity, &mut Grounded, &mut FacingLR),
         (With<Player>, Without<Platform>),
@@ -167,6 +169,7 @@ fn run_jump_physics(
     if jump_pressed && grounded.0 {
         vel.0.y = JUMP_VEL;
         grounded.0 = false;
+        commands.spawn(AudioPlayer::new(audio.load("sfx/jump.ogg")));
     }
 
     vel.0.y -= GRAVITY * dt;
@@ -281,6 +284,8 @@ fn check_fall(
 }
 
 fn check_goal(
+    mut commands: Commands,
+    audio: Res<AssetServer>,
     player: Query<&Transform, With<Player>>,
     goals: Query<&Transform, (With<Goal>, Without<Player>)>,
     mut state: ResMut<LevelState>,
@@ -295,6 +300,7 @@ fn check_goal(
             && (p.translation.y - g.translation.y).abs() < 110.0
         {
             state.won = true;
+            commands.spawn(AudioPlayer::new(audio.load("sfx/win.ogg")));
             break;
         }
     }
