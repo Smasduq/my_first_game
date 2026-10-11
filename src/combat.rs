@@ -379,6 +379,14 @@ mod tests {
             let samples = source.decoder().count();
             assert!(samples > 0, "{name} decodes to audio");
         }
+        // Background music track too.
+        let music = format!(
+            "{}/src/assets/2023 _ Clement Panchout - Unrecord.ogg",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let bytes = std::fs::read(&music).expect("music file exists");
+        let source = AudioSource { bytes: bytes.into() };
+        assert!(source.decoder().count() > 0, "music decodes to audio");
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use bevy::audio::{PlaybackMode, PlaybackSettings, Volume};
 use bevy::prelude::*;
 
 mod combat;
@@ -32,13 +33,25 @@ fn main() {
                 .set(ImagePlugin::default_nearest()),
         )
         .add_plugins((level::LevelPlugin, player::PlayerPlugin, CombatPlugin))
-        .add_systems(Startup, (setup_camera, setup_ui))
+        .add_systems(Startup, (setup_camera, setup_ui, start_music))
         .add_systems(Update, (follow_camera, update_status, update_win))
         .run();
 }
 
 fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
+}
+
+/// Looping background track, kept under the SFX.
+fn start_music(mut commands: Commands, assets: Res<AssetServer>) {
+    commands.spawn((
+        AudioPlayer::new(assets.load("2023 _ Clement Panchout - Unrecord.ogg")),
+        PlaybackSettings {
+            mode: PlaybackMode::Loop,
+            volume: Volume::Linear(0.35),
+            ..default()
+        },
+    ));
 }
 
 fn setup_ui(mut commands: Commands) {
