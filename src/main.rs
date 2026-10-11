@@ -8,7 +8,7 @@ mod player;
 
 use combat::{CombatPlugin, CombatStats};
 use level::LevelState;
-use menu::{GameState, Hud, MenuPlugin, MusicTrack};
+use menu::{Hud, MenuPlugin, MusicTrack};
 use player::{Health, Player};
 
 #[derive(Component)]
@@ -16,6 +16,21 @@ struct StatusText;
 
 #[derive(Component)]
 struct WinText;
+
+#[derive(Component)]
+struct HealthLabel;
+
+#[derive(Component)]
+struct HealthBarFill;
+
+#[derive(Component)]
+struct WinSummary;
+
+const HUD_PANEL: Color = Color::srgba(0.09, 0.07, 0.11, 0.94);
+const HUD_INK: Color = Color::srgb(0.94, 0.91, 0.89);
+const HUD_MUTED: Color = Color::srgb(0.78, 0.73, 0.77);
+const HUD_GOLD: Color = Color::srgb(0.91, 0.62, 0.26);
+const HUD_DANGER: Color = Color::srgb(0.86, 0.22, 0.24);
 
 fn main() {
     App::new()
@@ -63,59 +78,148 @@ fn start_music(mut commands: Commands, assets: Res<AssetServer>) {
 }
 
 fn setup_ui(mut commands: Commands) {
-    // Controls hint.
+    // Compact status panel.
     commands.spawn((
         Hud,
-        Text::new("A/D or Arrows: run   Space/W/Up: jump   J: shoot   R: restart"),
-        TextFont {
-            font_size: FontSize::Px(16.0),
-            ..default()
-        },
-        TextColor(Color::srgba(0.75, 0.72, 0.78, 0.85)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(10.0),
-            left: Val::Px(12.0),
+            top: Val::Px(14.0),
+            left: Val::Px(14.0),
+            width: Val::Px(310.0),
+            padding: UiRect::all(Val::Px(14.0)),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(9.0),
             ..default()
         },
+        BackgroundColor(HUD_PANEL),
+        children![
+            (
+                Text::new("DUSKFALL  /  VITALS"),
+                TextFont {
+                    font_size: FontSize::Px(16.0),
+                    ..default()
+                },
+                TextColor(HUD_MUTED),
+            ),
+            (
+                HealthLabel,
+                Text::new("100 / 100"),
+                TextFont {
+                    font_size: FontSize::Px(22.0),
+                    ..default()
+                },
+                TextColor(HUD_INK),
+            ),
+            (
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(12.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.20, 0.16, 0.21)),
+                children![(
+                    HealthBarFill,
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        ..default()
+                    },
+                    BackgroundColor(HUD_GOLD),
+                )],
+            ),
+            (
+                StatusText,
+                Text::new("FALLS   0       EYES DOWN   0"),
+                TextFont {
+                    font_size: FontSize::Px(16.0),
+                    ..default()
+                },
+                TextColor(HUD_INK),
+            ),
+        ],
     ));
-    // Deaths / status.
+
+    // Controls stay separate from run status.
     commands.spawn((
         Hud,
-        StatusText,
-        Text::new(""),
-        TextFont {
-            font_size: FontSize::Px(16.0),
-            ..default()
-        },
-        TextColor(Color::srgba(0.85, 0.6, 0.6, 0.9)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(32.0),
-            left: Val::Px(12.0),
+            bottom: Val::Px(14.0),
+            left: Val::Px(14.0),
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
             ..default()
         },
-    ));
-    // Center win message, hidden until won.
-    commands.spawn((
-        WinText,
-        Text::new("YOU ESCAPED  (R to run again)"),
-        TextFont {
-            font_size: FontSize::Px(42.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.9, 0.3, 0.3)),
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Percent(50.0),
-            top: Val::Percent(38.0),
-            margin: UiRect {
-                left: Val::Px(-260.0),
+        BackgroundColor(HUD_PANEL),
+        children![(
+            Text::new("A / D  MOVE     SPACE  JUMP     J  FIRE     ESC  PAUSE"),
+            TextFont {
+                font_size: FontSize::Px(15.0),
                 ..default()
             },
+            TextColor(HUD_MUTED),
+        )],
+    ));
+
+    // Centered results panel, hidden until the finish.
+    commands.spawn((
+        WinText,
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
             ..default()
         },
+        BackgroundColor(Color::srgba(0.01, 0.01, 0.03, 0.78)),
         Visibility::Hidden,
+        children![(
+            Node {
+                width: Val::Percent(90.0),
+                max_width: Val::Px(440.0),
+                padding: UiRect::all(Val::Px(26.0)),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(14.0),
+                ..default()
+            },
+            BackgroundColor(HUD_PANEL),
+            children![
+                (
+                    Text::new("DUSKFALL"),
+                    TextFont {
+                        font_size: FontSize::Px(18.0),
+                        ..default()
+                    },
+                    TextColor(HUD_GOLD),
+                ),
+                (
+                    Text::new("YOU ESCAPED"),
+                    TextFont {
+                        font_size: FontSize::Px(38.0),
+                        ..default()
+                    },
+                    TextColor(HUD_INK),
+                ),
+                (
+                    WinSummary,
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(17.0),
+                        ..default()
+                    },
+                    TextColor(HUD_MUTED),
+                ),
+                (
+                    Text::new("R  RUN AGAIN     ESC  RETURN TO MENU"),
+                    TextFont {
+                        font_size: FontSize::Px(15.0),
+                        ..default()
+                    },
+                    TextColor(HUD_GOLD),
+                ),
+            ],
+        )],
     ));
 }
 
@@ -129,7 +233,11 @@ fn follow_camera(
         return;
     };
     // Look slightly ahead and above the runner; smooth it.
-    let target = Vec3::new(p.translation.x + 90.0, (p.translation.y + 90.0).max(-40.0), cam.translation.z);
+    let target = Vec3::new(
+        p.translation.x + 90.0,
+        (p.translation.y + 90.0).max(-40.0),
+        cam.translation.z,
+    );
     let k = 1.0 - (-5.0 * time.delta_secs()).exp();
     cam.translation = cam.translation.lerp(target, k);
 }
@@ -139,37 +247,48 @@ fn update_status(
     combat: Res<CombatStats>,
     health: Query<&Health, With<Player>>,
     mut text: Query<&mut Text, With<StatusText>>,
-    mut tint: Query<&mut TextColor, With<StatusText>>,
+    mut label: Query<&mut Text, (With<HealthLabel>, Without<StatusText>)>,
+    mut bar: Query<&mut Node, With<HealthBarFill>>,
+    mut bar_color: Query<&mut BackgroundColor, With<HealthBarFill>>,
 ) {
-    let Ok(mut t) = text.single_mut() else { return };
-    let hp = health.single().map(|h| h.hp).unwrap_or(Health::MAX);
-    if let Ok(mut c) = tint.single_mut() {
-        c.0 = if hp > 50.0 {
-            Color::srgba(0.5, 0.9, 0.5, 0.9)
-        } else if hp > 25.0 {
-            Color::srgba(0.95, 0.75, 0.35, 0.9)
-        } else {
-            Color::srgba(0.95, 0.35, 0.35, 0.95)
-        };
+    let Ok(health) = health.single() else { return };
+    let hp = health.hp.clamp(0.0, Health::MAX);
+    if let Ok(mut t) = text.single_mut() {
+        **t = format!(
+            "FALLS   {}       EYES DOWN   {}",
+            state.deaths, combat.kills
+        );
     }
-    if state.won {
-        **t = format!(
-            "Escaped! HP: {:.0}%  Falls: {}  Eyes down: {}",
-            hp, state.deaths, combat.kills
-        );
-    } else {
-        **t = format!(
-            "Reach the red flag. HP: {:.0}%  Falls: {}  Eyes down: {}  Hits: {}",
-            hp, state.deaths, combat.kills, combat.hits
-        );
+    if let Ok(mut t) = label.single_mut() {
+        **t = format!("{hp:.0} / {:.0}", Health::MAX);
+    }
+    if let Ok(mut node) = bar.single_mut() {
+        node.width = Val::Percent(hp / Health::MAX * 100.0);
+    }
+    if let Ok(mut color) = bar_color.single_mut() {
+        color.0 = if hp <= 25.0 { HUD_DANGER } else { HUD_GOLD };
     }
 }
 
-fn update_win(state: Res<LevelState>, mut vis: Query<&mut Visibility, With<WinText>>) {
+fn update_win(
+    state: Res<LevelState>,
+    combat: Res<CombatStats>,
+    health: Query<&Health, With<Player>>,
+    mut vis: Query<&mut Visibility, With<WinText>>,
+    mut summary: Query<&mut Text, With<WinSummary>>,
+) {
     let Ok(mut v) = vis.single_mut() else { return };
     *v = if state.won {
         Visibility::Visible
     } else {
         Visibility::Hidden
     };
+    if state.won
+        && let (Ok(health), Ok(mut text)) = (health.single(), summary.single_mut())
+    {
+        **text = format!(
+            "HEALTH  {:.0}%     FALLS  {}     EYES DOWN  {}",
+            health.hp, state.deaths, combat.kills
+        );
+    }
 }

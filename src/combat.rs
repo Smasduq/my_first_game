@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::level::{LevelState, SpawnPoint};
 use crate::menu::{GameState, SfxEnabled};
-use crate::player::{muzzle_offset, FacingLR, Health, Player, Velocity};
+use crate::player::{FacingLR, Health, Player, Velocity, muzzle_offset};
 
 /// Kills by gunfire + times an eye reached the player.
 #[derive(Resource, Default)]
@@ -37,9 +37,22 @@ struct FireCooldown {
     timer: Timer,
 }
 
+#[derive(Resource)]
+struct CombatAssets {
+    eye_image: Handle<Image>,
+    eye_layout: Handle<TextureAtlasLayout>,
+    impact_image: Handle<Image>,
+    impact_layout: Handle<TextureAtlasLayout>,
+}
+
 /// Short-lived flash/spark, despawned by `despawn_after`.
 #[derive(Component)]
 pub(crate) struct Life {
+    timer: Timer,
+}
+
+#[derive(Component)]
+struct Impact {
     timer: Timer,
 }
 
@@ -60,6 +73,7 @@ impl Plugin for CombatPlugin {
             .insert_resource(FireCooldown {
                 timer: Timer::from_seconds(0.22, TimerMode::Once),
             })
+            .add_systems(Startup, load_combat_assets)
             .add_systems(
                 Update,
                 (
@@ -71,10 +85,37 @@ impl Plugin for CombatPlugin {
                     bullet_hits,
                     eye_hits_player,
                     despawn_after,
+                    animate_impacts,
                 )
                     .run_if(in_state(GameState::Playing)),
             );
     }
+}
+
+fn load_combat_assets(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    mut layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
+    commands.insert_resource(CombatAssets {
+        eye_image: assets.load("Gothicvania/Characters/flying-eye-demon/Spritesheet.png"),
+        eye_layout: layouts.add(TextureAtlasLayout::from_grid(
+            UVec2::new(48, 48),
+            8,
+            1,
+            None,
+            None,
+        )),
+        impact_image: assets
+            .load("Explosions and Magic/Warped shooting fx/hits/hits-1/spritesheet.png"),
+        impact_layout: layouts.add(TextureAtlasLayout::from_grid(
+            UVec2::new(32, 32),
+            5,
+            1,
+            None,
+            None,
+        )),
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -82,8 +123,7 @@ fn spawn_eyes(
     mut commands: Commands,
     time: Res<Time>,
     state: Res<LevelState>,
-    assets: Res<AssetServer>,
-    mut layouts: ResMut<Assets<TextureAtlasLayout>>,
+    assets: Res<CombatAssets>,
     mut spawner: ResMut<EyeSpawner>,
     player: Query<&Transform, With<Player>>,
     camera: Query<&Transform, (With<Camera>, Without<Player>)>,
@@ -118,7 +158,6 @@ fn spawn_eyes(
         3.0,
     );
     let dir = (p.translation.truncate() - pos.truncate()).normalize_or_zero();
-    let layout = TextureAtlasLayout::from_grid(UVec2::new(48, 48), 8, 1, None, None);
 
     commands.spawn((
         Eye {
@@ -126,9 +165,9 @@ fn spawn_eyes(
             phase: spawner.count as f32,
         },
         Sprite {
-            image: assets.load("Gothicvania/Characters/flying-eye-demon/Spritesheet.png"),
+            image: assets.eye_image.clone(),
             texture_atlas: Some(TextureAtlas {
-                layout: layouts.add(layout),
+                layout: assets.eye_layout.clone(),
                 index: 0,
             }),
             ..default()
@@ -166,7 +205,9 @@ fn fire_gun(
     cd.timer.reset();
 
     if sfx.0 {
-        commands.spawn(AudioPlayer::new(audio.load("12_Player_Movement_SFX/56_Attack_03.ogg")));
+        commands.spawn(AudioPlayer::new(
+            audio.load("12_Player_Movement_SFX/56_Attack_03.ogg"),
+        ));
     }
     let s = match facing {
         FacingLR::Right => 1.0,
@@ -211,7 +252,9 @@ fn move_eyes(
     for (mut t, mut e) in &mut eyes {
         // Steer toward the player so eyes genuinely chase instead of
         // flying a fixed line. Frozen once the level is won.
-        if !state.won && let Some(tp) = target {
+        if !state.won
+            && let Some(tp) = target
+        {
             let to = tp - t.translation.truncate();
             if to.length_squared() > 1.0 {
                 let desired = to.normalize() * EYE_SPEED;
@@ -281,6 +324,7 @@ fn face_player(
 fn bullet_hits(
     mut commands: Commands,
     audio: Res<AssetServer>,
+    assets: Res<CombatAssets>,
     sfx: Res<SfxEnabled>,
     bullets: Query<(Entity, &Transform), With<Bullet>>,
     eyes: Query<(Entity, &Transform), (With<Eye>, Without<Bullet>)>,
@@ -295,19 +339,28 @@ fn bullet_hits(
                 commands.entity(ee).despawn();
                 stats.kills += 1;
                 if sfx.0 {
-                    commands.spawn(AudioPlayer::new(audio.load("10_Battle_SFX/69_Enemy_death_01.ogg")));
+                    commands.spawn(AudioPlayer::new(
+                        audio.load("10_Battle_SFX/69_Enemy_death_01.ogg"),
+                    ));
                 }
-                // Hit spark.
+                // The five-frame pixel spark reuses one preloaded atlas.
                 commands.spawn((
-                    Life {
-                        timer: Timer::from_seconds(0.15, TimerMode::Once),
+                    Impact {
+                        timer: Timer::from_seconds(0.045, TimerMode::Repeating),
                     },
                     Sprite {
-                        color: Color::srgb(1.0, 0.4, 0.3),
-                        custom_size: Some(Vec2::new(30.0, 30.0)),
+                        image: assets.impact_image.clone(),
+                        texture_atlas: Some(TextureAtlas {
+                            layout: assets.impact_layout.clone(),
+                            index: 0,
+                        }),
                         ..default()
                     },
-                    Transform::from_xyz(et.translation.x, et.translation.y, 4.5),
+                    Transform {
+                        translation: Vec3::new(et.translation.x, et.translation.y, 4.5),
+                        scale: Vec3::splat(2.0),
+                        ..default()
+                    },
                 ));
                 break;
             }
@@ -321,6 +374,7 @@ fn eye_hits_player(
     mut commands: Commands,
     time: Res<Time>,
     audio: Res<AssetServer>,
+    assets: Res<CombatAssets>,
     sfx: Res<SfxEnabled>,
     spawn: Res<SpawnPoint>,
     mut state: ResMut<LevelState>,
@@ -346,8 +400,29 @@ fn eye_hits_player(
         health.invuln.reset();
         health.hp -= EYE_DAMAGE;
         stats.hits += 1;
+        commands.spawn((
+            Impact {
+                timer: Timer::from_seconds(0.045, TimerMode::Repeating),
+            },
+            Sprite {
+                image: assets.impact_image.clone(),
+                texture_atlas: Some(TextureAtlas {
+                    layout: assets.impact_layout.clone(),
+                    index: 0,
+                }),
+                color: Color::srgb(1.0, 0.55, 0.55),
+                ..default()
+            },
+            Transform {
+                translation: Vec3::new(t.translation.x, t.translation.y, 4.5),
+                scale: Vec3::splat(2.0),
+                ..default()
+            },
+        ));
         if sfx.0 {
-            commands.spawn(AudioPlayer::new(audio.load("12_Player_Movement_SFX/61_Hit_03.ogg")));
+            commands.spawn(AudioPlayer::new(
+                audio.load("12_Player_Movement_SFX/61_Hit_03.ogg"),
+            ));
         }
         if health.hp <= 0.0 {
             // Killed: respawn fresh like a fall.
@@ -369,10 +444,32 @@ fn despawn_after(mut commands: Commands, time: Res<Time>, mut query: Query<(Enti
     }
 }
 
+fn animate_impacts(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut impacts: Query<(Entity, &mut Impact, &mut Sprite)>,
+) {
+    for (entity, mut impact, mut sprite) in &mut impacts {
+        impact.timer.tick(time.delta());
+        if !impact.timer.just_finished() {
+            continue;
+        }
+        let Some(atlas) = sprite.texture_atlas.as_mut() else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        atlas.index += 1;
+        if atlas.index >= 5 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::level::LevelPlugin;
+    use crate::menu::{GameState, MenuPlugin};
     use crate::player::{PlayerPlugin, Velocity};
     use bevy::audio::Decodable;
 
@@ -389,7 +486,9 @@ mod tests {
         ] {
             let path = format!("{}/src/assets/{}", env!("CARGO_MANIFEST_DIR"), name);
             let bytes = std::fs::read(&path).expect("sfx file exists");
-            let source = AudioSource { bytes: bytes.into() };
+            let source = AudioSource {
+                bytes: bytes.into(),
+            };
             let samples = source.decoder().count();
             assert!(samples > 0, "{name} decodes to audio");
         }
@@ -399,7 +498,9 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         );
         let bytes = std::fs::read(&music).expect("music file exists");
-        let source = AudioSource { bytes: bytes.into() };
+        let source = AudioSource {
+            bytes: bytes.into(),
+        };
         assert!(source.decoder().count() > 0, "music decodes to audio");
     }
 
@@ -411,7 +512,12 @@ mod tests {
         app.init_asset::<Image>();
         app.init_asset::<AudioSource>();
         app.init_asset::<TextureAtlasLayout>();
-        app.add_plugins((LevelPlugin, PlayerPlugin, CombatPlugin));
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins((LevelPlugin, PlayerPlugin, CombatPlugin, MenuPlugin));
+        // Gameplay systems only run in Playing state.
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
 
         // Let Startup spawn the player, platforms, spawners.
         for _ in 0..10 {

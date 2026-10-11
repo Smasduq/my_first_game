@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::level::{Goal, LevelState, Platform, SpawnPoint, KILL_Y};
+use crate::level::{Goal, KILL_Y, LevelState, Platform, SpawnPoint};
 use crate::menu::{GameState, SfxEnabled};
 
 /// Marker for the player entity.
@@ -96,13 +96,16 @@ const PLAYER_HALF: Vec2 = Vec2::new(20.0, 42.0);
 fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, spawn: Res<SpawnPoint>) {
     let run = (1..=10)
         .map(|i| {
-            asset_server.load(format!("{MARINE_BASE}/Run with Gun/sprites/run-with-gun{i}.png"))
+            asset_server.load(format!(
+                "{MARINE_BASE}/Run with Gun/sprites/run-with-gun{i}.png"
+            ))
         })
         .collect();
     let idle: Handle<Image> =
         asset_server.load(format!("{MARINE_BASE}/Idle Gun/sprites/idle-gun1.png"));
-    let jump: Handle<Image> =
-        asset_server.load(format!("{MARINE_BASE}/Jump with Gun/sprites/jump-with-gun3.png"));
+    let jump: Handle<Image> = asset_server.load(format!(
+        "{MARINE_BASE}/Jump with Gun/sprites/jump-with-gun3.png"
+    ));
 
     commands.spawn((
         Player,
@@ -174,7 +177,9 @@ fn run_jump_physics(
         vel.0.y = JUMP_VEL;
         grounded.0 = false;
         if sfx.0 {
-            commands.spawn(AudioPlayer::new(audio.load("12_Player_Movement_SFX/30_Jump_03.ogg")));
+            commands.spawn(AudioPlayer::new(
+                audio.load("12_Player_Movement_SFX/30_Jump_03.ogg"),
+            ));
         }
     }
 
@@ -236,6 +241,7 @@ fn animate_marine(
             &FacingLR,
             &Velocity,
             &Grounded,
+            &Health,
             &mut MarineAnim,
             &mut Sprite,
             &mut Transform,
@@ -243,7 +249,7 @@ fn animate_marine(
         With<Player>,
     >,
 ) {
-    for (facing, vel, grounded, mut anim, mut sprite, mut transform) in &mut query {
+    for (facing, vel, grounded, health, mut anim, mut sprite, mut transform) in &mut query {
         // Marine art faces right; mirror for left.
         transform.scale.x = match facing {
             FacingLR::Right => 2.0,
@@ -267,6 +273,13 @@ fn animate_marine(
             anim.frame = 0;
             anim.timer.reset();
         }
+        let blinking = !health.invuln.is_finished()
+            && ((health.invuln.elapsed_secs() * 10.0).floor() as u32).is_multiple_of(2);
+        sprite.color = if blinking {
+            Color::srgb(1.0, 0.55, 0.55)
+        } else {
+            Color::WHITE
+        };
     }
 }
 
@@ -308,7 +321,9 @@ fn check_goal(
         {
             state.won = true;
             if sfx.0 {
-                commands.spawn(AudioPlayer::new(audio.load("10_Battle_SFX/55_Encounter_02.ogg")));
+                commands.spawn(AudioPlayer::new(
+                    audio.load("10_Battle_SFX/55_Encounter_02.ogg"),
+                ));
             }
             break;
         }

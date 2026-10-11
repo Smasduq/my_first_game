@@ -37,6 +37,11 @@ struct Fog {
     speed: f32,
 }
 
+#[derive(Component)]
+struct LanternGlow {
+    phase: f32,
+}
+
 pub const KILL_Y: f32 = -500.0;
 
 /// Platforms as (x_min, x_max, top_y).
@@ -105,10 +110,11 @@ impl Plugin for LevelPlugin {
                     spawn_goal,
                     spawn_background,
                     spawn_trees,
+                    spawn_lanterns,
                     spawn_fog,
                 ),
             )
-            .add_systems(Update, (scroll_background, drift_fog));
+            .add_systems(Update, (scroll_background, drift_fog, flicker_lanterns));
     }
 }
 
@@ -150,6 +156,30 @@ fn spawn_platforms(mut commands: Commands) {
             },
             Transform::from_xyz(cx, top - 11.0, 0.5),
         ));
+
+        let mut seam_x = x_min + 56.0;
+        let mut seam_index = 0;
+        while seam_x < x_max - 32.0 {
+            let seam_height = 24.0 + (seam_index % 3) as f32 * 8.0;
+            commands.spawn((
+                Sprite {
+                    color: Color::srgb(0.13, 0.08, 0.17),
+                    custom_size: Some(Vec2::new(3.0, seam_height)),
+                    ..default()
+                },
+                Transform::from_xyz(seam_x, top - 30.0, 0.6),
+            ));
+            commands.spawn((
+                Sprite {
+                    color: Color::srgb(0.16, 0.09, 0.17),
+                    custom_size: Some(Vec2::new(18.0, 2.0)),
+                    ..default()
+                },
+                Transform::from_xyz(seam_x + 9.0, top - 30.0 - seam_height * 0.5, 0.6),
+            ));
+            seam_x += 96.0;
+            seam_index += 1;
+        }
     }
 }
 
@@ -226,8 +256,8 @@ fn scroll_background(
     for (mut t, b) in &mut tiles {
         let total = b.count as f32 * b.tile_w;
         let anchor = cam.translation.x * b.factor;
-        let rel = (b.slot as f32 * b.tile_w + anchor - (cam.translation.x - BG_MARGIN))
-            .rem_euclid(total);
+        let rel =
+            (b.slot as f32 * b.tile_w + anchor - (cam.translation.x - BG_MARGIN)).rem_euclid(total);
         t.translation.x = cam.translation.x - BG_MARGIN + rel;
         // Keep the art horizon registered across layers, just below the action.
         t.translation.y = cam.translation.y - 60.0;
@@ -240,7 +270,11 @@ fn spawn_trees(mut commands: Commands) {
 
     let tree_x = [-200.0, 150.0, 620.0, 800.0, 1180.0, 1700.0, 2050.0];
     for (i, x) in tree_x.iter().enumerate() {
-        let top = if (1000.0..1450.0).contains(x) { 70.0 } else { 0.0 };
+        let top = if (1000.0..1450.0).contains(x) {
+            70.0
+        } else {
+            0.0
+        };
         let h_var = 110.0 + (i as f32 % 3.0) * 25.0;
         // Trunk.
         commands.spawn((
@@ -286,6 +320,65 @@ fn spawn_fog(mut commands: Commands) {
             },
             Transform::from_xyz(*x, -40.0 + (i as f32 % 3.0) * 70.0, 5.0),
         ));
+    }
+}
+
+fn spawn_lanterns(mut commands: Commands) {
+    for (i, (x, top)) in [(190.0, 0.0), (720.0, 0.0), (1260.0, 70.0), (1860.0, 0.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let metal = Color::srgb(0.11, 0.08, 0.12);
+        commands.spawn((
+            Sprite {
+                color: metal,
+                custom_size: Some(Vec2::new(5.0, 30.0)),
+                ..default()
+            },
+            Transform::from_xyz(x, top + 15.0, 2.0),
+        ));
+        commands.spawn((
+            Sprite {
+                color: metal,
+                custom_size: Some(Vec2::new(18.0, 4.0)),
+                ..default()
+            },
+            Transform::from_xyz(x, top + 29.0, 2.0),
+        ));
+        commands.spawn((
+            LanternGlow {
+                phase: i as f32 * 1.7,
+            },
+            Sprite {
+                color: Color::srgba(0.92, 0.49, 0.15, 0.14),
+                custom_size: Some(Vec2::new(30.0, 34.0)),
+                ..default()
+            },
+            Transform::from_xyz(x, top + 38.0, 2.1),
+        ));
+        commands.spawn((
+            Sprite {
+                color: Color::srgb(0.96, 0.61, 0.24),
+                custom_size: Some(Vec2::new(9.0, 14.0)),
+                ..default()
+            },
+            Transform::from_xyz(x, top + 38.0, 2.2),
+        ));
+        commands.spawn((
+            Sprite {
+                color: Color::srgb(0.21, 0.12, 0.15),
+                custom_size: Some(Vec2::new(15.0, 3.0)),
+                ..default()
+            },
+            Transform::from_xyz(x, top + 47.0, 2.3),
+        ));
+    }
+}
+
+fn flicker_lanterns(time: Res<Time>, mut lanterns: Query<(&LanternGlow, &mut Sprite)>) {
+    for (glow, mut sprite) in &mut lanterns {
+        let flicker = (time.elapsed_secs() * 5.0 + glow.phase).sin() * 0.035;
+        sprite.color = Color::srgba(0.92, 0.49, 0.15, 0.14 + flicker);
     }
 }
 
