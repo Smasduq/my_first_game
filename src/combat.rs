@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::level::{LevelState, SpawnPoint};
+use crate::menu::{GameState, SfxEnabled};
 use crate::player::{muzzle_offset, FacingLR, Health, Player, Velocity};
 
 /// Kills by gunfire + times an eye reached the player.
@@ -12,14 +13,14 @@ pub struct CombatStats {
 
 /// A flying eye demon homing in on the player.
 #[derive(Component)]
-struct Eye {
+pub(crate) struct Eye {
     vel: Vec2,
     phase: f32,
 }
 
 /// Bullet in flight.
 #[derive(Component)]
-struct Bullet {
+pub(crate) struct Bullet {
     vel: Vec2,
 }
 
@@ -38,7 +39,7 @@ struct FireCooldown {
 
 /// Short-lived flash/spark, despawned by `despawn_after`.
 #[derive(Component)]
-struct Life {
+pub(crate) struct Life {
     timer: Timer,
 }
 
@@ -70,7 +71,8 @@ impl Plugin for CombatPlugin {
                     bullet_hits,
                     eye_hits_player,
                     despawn_after,
-                ),
+                )
+                    .run_if(in_state(GameState::Playing)),
             );
     }
 }
@@ -140,12 +142,14 @@ fn spawn_eyes(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fire_gun(
     mut commands: Commands,
     input: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     state: Res<LevelState>,
     audio: Res<AssetServer>,
+    sfx: Res<SfxEnabled>,
     mut cd: ResMut<FireCooldown>,
     player: Query<(&Transform, &FacingLR), With<Player>>,
 ) {
@@ -161,7 +165,9 @@ fn fire_gun(
     };
     cd.timer.reset();
 
-    commands.spawn(AudioPlayer::new(audio.load("sfx/shoot.ogg")));
+    if sfx.0 {
+        commands.spawn(AudioPlayer::new(audio.load("12_Player_Movement_SFX/56_Attack_03.ogg")));
+    }
     let s = match facing {
         FacingLR::Right => 1.0,
         FacingLR::Left => -1.0,
@@ -275,6 +281,7 @@ fn face_player(
 fn bullet_hits(
     mut commands: Commands,
     audio: Res<AssetServer>,
+    sfx: Res<SfxEnabled>,
     bullets: Query<(Entity, &Transform), With<Bullet>>,
     eyes: Query<(Entity, &Transform), (With<Eye>, Without<Bullet>)>,
     mut stats: ResMut<CombatStats>,
@@ -287,7 +294,9 @@ fn bullet_hits(
                 commands.entity(be).despawn();
                 commands.entity(ee).despawn();
                 stats.kills += 1;
-                commands.spawn(AudioPlayer::new(audio.load("sfx/crow_die.ogg")));
+                if sfx.0 {
+                    commands.spawn(AudioPlayer::new(audio.load("10_Battle_SFX/69_Enemy_death_01.ogg")));
+                }
                 // Hit spark.
                 commands.spawn((
                     Life {
@@ -312,6 +321,7 @@ fn eye_hits_player(
     mut commands: Commands,
     time: Res<Time>,
     audio: Res<AssetServer>,
+    sfx: Res<SfxEnabled>,
     spawn: Res<SpawnPoint>,
     mut state: ResMut<LevelState>,
     mut player: Query<(&mut Transform, &mut Velocity, &mut Health), With<Player>>,
@@ -336,7 +346,9 @@ fn eye_hits_player(
         health.invuln.reset();
         health.hp -= EYE_DAMAGE;
         stats.hits += 1;
-        commands.spawn(AudioPlayer::new(audio.load("sfx/hurt.ogg")));
+        if sfx.0 {
+            commands.spawn(AudioPlayer::new(audio.load("12_Player_Movement_SFX/61_Hit_03.ogg")));
+        }
         if health.hp <= 0.0 {
             // Killed: respawn fresh like a fall.
             t.translation = spawn.0;
@@ -364,16 +376,18 @@ mod tests {
     use crate::player::{PlayerPlugin, Velocity};
     use bevy::audio::Decodable;
 
-    /// Every SFX must fully decode with the enabled backend.
+    /// Every game sound must fully decode with the enabled backend.
     /// (A previous WAV set panicked at runtime with `UnrecognizedFormat`.)
     #[test]
     fn sfx_files_decode() {
-        for name in ["shoot", "crow_die", "hurt", "jump", "win"] {
-            let path = format!(
-                "{}/src/assets/sfx/{}.ogg",
-                env!("CARGO_MANIFEST_DIR"),
-                name
-            );
+        for name in [
+            "12_Player_Movement_SFX/56_Attack_03.ogg",
+            "10_Battle_SFX/69_Enemy_death_01.ogg",
+            "12_Player_Movement_SFX/61_Hit_03.ogg",
+            "12_Player_Movement_SFX/30_Jump_03.ogg",
+            "10_Battle_SFX/55_Encounter_02.ogg",
+        ] {
+            let path = format!("{}/src/assets/{}", env!("CARGO_MANIFEST_DIR"), name);
             let bytes = std::fs::read(&path).expect("sfx file exists");
             let source = AudioSource { bytes: bytes.into() };
             let samples = source.decoder().count();

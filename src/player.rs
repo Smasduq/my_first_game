@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::level::{Goal, LevelState, Platform, SpawnPoint, KILL_Y};
+use crate::menu::{GameState, SfxEnabled};
 
 /// Marker for the player entity.
 #[derive(Component)]
@@ -76,7 +77,8 @@ impl Plugin for PlayerPlugin {
                 check_goal,
                 restart_on_key,
             )
-                .chain(),
+                .chain()
+                .run_if(in_state(GameState::Playing)),
         );
     }
 }
@@ -128,11 +130,13 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, spawn: R
 }
 
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn run_jump_physics(
     input: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     state: Res<LevelState>,
     audio: Res<AssetServer>,
+    sfx: Res<SfxEnabled>,
     mut commands: Commands,
     mut player: Query<
         (&mut Transform, &mut Velocity, &mut Grounded, &mut FacingLR),
@@ -169,7 +173,9 @@ fn run_jump_physics(
     if jump_pressed && grounded.0 {
         vel.0.y = JUMP_VEL;
         grounded.0 = false;
-        commands.spawn(AudioPlayer::new(audio.load("sfx/jump.ogg")));
+        if sfx.0 {
+            commands.spawn(AudioPlayer::new(audio.load("12_Player_Movement_SFX/30_Jump_03.ogg")));
+        }
     }
 
     vel.0.y -= GRAVITY * dt;
@@ -286,6 +292,7 @@ fn check_fall(
 fn check_goal(
     mut commands: Commands,
     audio: Res<AssetServer>,
+    sfx: Res<SfxEnabled>,
     player: Query<&Transform, With<Player>>,
     goals: Query<&Transform, (With<Goal>, Without<Player>)>,
     mut state: ResMut<LevelState>,
@@ -300,7 +307,9 @@ fn check_goal(
             && (p.translation.y - g.translation.y).abs() < 110.0
         {
             state.won = true;
-            commands.spawn(AudioPlayer::new(audio.load("sfx/win.ogg")));
+            if sfx.0 {
+                commands.spawn(AudioPlayer::new(audio.load("10_Battle_SFX/55_Encounter_02.ogg")));
+            }
             break;
         }
     }

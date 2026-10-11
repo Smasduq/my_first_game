@@ -3,10 +3,12 @@ use bevy::prelude::*;
 
 mod combat;
 mod level;
+mod menu;
 mod player;
 
 use combat::{CombatPlugin, CombatStats};
 use level::LevelState;
+use menu::{GameState, Hud, MenuPlugin, MusicTrack};
 use player::{Health, Player};
 
 #[derive(Component)]
@@ -32,7 +34,12 @@ fn main() {
                 })
                 .set(ImagePlugin::default_nearest()),
         )
-        .add_plugins((level::LevelPlugin, player::PlayerPlugin, CombatPlugin))
+        .add_plugins((
+            level::LevelPlugin,
+            player::PlayerPlugin,
+            CombatPlugin,
+            MenuPlugin,
+        ))
         .add_systems(Startup, (setup_camera, setup_ui, start_music))
         .add_systems(Update, (follow_camera, update_status, update_win))
         .run();
@@ -45,6 +52,7 @@ fn setup_camera(mut commands: Commands) {
 /// Looping background track, kept under the SFX.
 fn start_music(mut commands: Commands, assets: Res<AssetServer>) {
     commands.spawn((
+        MusicTrack,
         AudioPlayer::new(assets.load("2023 _ Clement Panchout - Unrecord.ogg")),
         PlaybackSettings {
             mode: PlaybackMode::Loop,
@@ -57,6 +65,7 @@ fn start_music(mut commands: Commands, assets: Res<AssetServer>) {
 fn setup_ui(mut commands: Commands) {
     // Controls hint.
     commands.spawn((
+        Hud,
         Text::new("A/D or Arrows: run   Space/W/Up: jump   J: shoot   R: restart"),
         TextFont {
             font_size: FontSize::Px(16.0),
@@ -72,6 +81,7 @@ fn setup_ui(mut commands: Commands) {
     ));
     // Deaths / status.
     commands.spawn((
+        Hud,
         StatusText,
         Text::new(""),
         TextFont {
