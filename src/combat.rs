@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::level::LevelState;
-use crate::player::{muzzle_offset, FacingLR, Player};
+use crate::level::{LevelState, SpawnPoint};
+use crate::player::{muzzle_offset, FacingLR, Health, Player, Velocity};
 
 /// Kills by gunfire + times a crow reached the player.
 #[derive(Resource, Default)]
@@ -50,6 +50,7 @@ struct Life {
 
 const CROW_SPEED: f32 = 150.0;
 const BULLET_SPEED: f32 = 750.0;
+const CROW_DAMAGE: f32 = 9.0;
 const MAX_CROWS: usize = 8;
 
 pub struct CombatPlugin;
@@ -271,17 +272,38 @@ fn bullet_hits(
 #[allow(clippy::type_complexity)]
 fn crow_hits_player(
     mut commands: Commands,
-    player: Query<&Transform, With<Player>>,
+    time: Res<Time>,
+    spawn: Res<SpawnPoint>,
+    mut state: ResMut<LevelState>,
+    mut player: Query<(&mut Transform, &mut Velocity, &mut Health), With<Player>>,
     crows: Query<(Entity, &Transform), (With<Crow>, Without<Player>)>,
     mut stats: ResMut<CombatStats>,
 ) {
-    let Ok(p) = player.single() else { return };
+    let Ok((mut t, mut vel, mut health)) = player.single_mut() else {
+        return;
+    };
+    health.invuln.tick(time.delta());
     for (ce, ct) in &crows {
-        let dx = (p.translation.x - ct.translation.x).abs();
-        let dy = (p.translation.y - ct.translation.y).abs();
-        if dx < 48.0 && dy < 62.0 {
-            commands.entity(ce).despawn();
-            stats.hits += 1;
+        let dx = (t.translation.x - ct.translation.x).abs();
+        let dy = (t.translation.y - ct.translation.y).abs();
+        if dx >= 48.0 || dy >= 62.0 {
+            continue;
+        }
+        commands.entity(ce).despawn();
+        // I-frames: one damaging hit per second at most.
+        if !health.invuln.is_finished() {
+            continue;
+        }
+        health.invuln.reset();
+        health.hp -= CROW_DAMAGE;
+        stats.hits += 1;
+        if health.hp <= 0.0 {
+            // Killed: respawn fresh like a fall.
+            t.translation = spawn.0;
+            vel.0 = Vec2::ZERO;
+            *health = Health::full();
+            state.deaths += 1;
+            break;
         }
     }
 }

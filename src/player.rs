@@ -8,7 +8,29 @@ pub struct Player;
 
 /// Vertical/horizontal speed.
 #[derive(Component, Default)]
-struct Velocity(Vec2);
+pub(crate) struct Velocity(pub(crate) Vec2);
+
+/// Health pool. `invuln` is ticking i-frames after a hit.
+#[derive(Component)]
+pub(crate) struct Health {
+    pub hp: f32,
+    pub invuln: Timer,
+}
+
+impl Health {
+    pub const MAX: f32 = 100.0;
+    pub const INVULN_TIME: f32 = 1.0;
+
+    pub(crate) fn full() -> Self {
+        // Finished timer = vulnerable; `reset()` on a hit starts i-frames.
+        let mut invuln = Timer::from_seconds(Self::INVULN_TIME, TimerMode::Once);
+        invuln.finish();
+        Self {
+            hp: Self::MAX,
+            invuln,
+        }
+    }
+}
 
 /// True when standing on a platform.
 #[derive(Component, Default)]
@@ -83,6 +105,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, spawn: R
     commands.spawn((
         Player,
         Velocity::default(),
+        Health::full(),
         Grounded(false),
         FacingLR::Right,
         MarineAnim {
@@ -242,15 +265,16 @@ fn check_fall(
     mut player: Query<&mut Transform, With<Player>>,
     spawn: Res<SpawnPoint>,
     mut state: ResMut<LevelState>,
-    mut vel: Query<&mut Velocity, With<Player>>,
+    mut stuff: Query<(&mut Velocity, &mut Health), With<Player>>,
 ) {
     let Ok(mut transform) = player.single_mut() else {
         return;
     };
     if transform.translation.y < KILL_Y {
         transform.translation = spawn.0;
-        if let Ok(mut v) = vel.single_mut() {
+        if let Ok((mut v, mut h)) = stuff.single_mut() {
             v.0 = Vec2::ZERO;
+            *h = Health::full();
         }
         state.deaths += 1;
     }
@@ -279,7 +303,7 @@ fn check_goal(
 fn restart_on_key(
     input: Res<ButtonInput<KeyCode>>,
     mut player: Query<&mut Transform, With<Player>>,
-    mut vel: Query<&mut Velocity, With<Player>>,
+    mut stuff: Query<(&mut Velocity, &mut Health), With<Player>>,
     spawn: Res<SpawnPoint>,
     mut state: ResMut<LevelState>,
 ) {
@@ -287,8 +311,9 @@ fn restart_on_key(
         if let Ok(mut t) = player.single_mut() {
             t.translation = spawn.0;
         }
-        if let Ok(mut v) = vel.single_mut() {
+        if let Ok((mut v, mut h)) = stuff.single_mut() {
             v.0 = Vec2::ZERO;
+            *h = Health::full();
         }
         state.won = false;
     }

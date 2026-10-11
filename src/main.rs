@@ -6,7 +6,7 @@ mod player;
 
 use combat::{CombatPlugin, CombatStats};
 use level::LevelState;
-use player::Player;
+use player::{Health, Player};
 
 #[derive(Component)]
 struct StatusText;
@@ -108,18 +108,30 @@ fn follow_camera(
 fn update_status(
     state: Res<LevelState>,
     combat: Res<CombatStats>,
+    health: Query<&Health, With<Player>>,
     mut text: Query<&mut Text, With<StatusText>>,
+    mut tint: Query<&mut TextColor, With<StatusText>>,
 ) {
     let Ok(mut t) = text.single_mut() else { return };
+    let hp = health.single().map(|h| h.hp).unwrap_or(Health::MAX);
+    if let Ok(mut c) = tint.single_mut() {
+        c.0 = if hp > 50.0 {
+            Color::srgba(0.5, 0.9, 0.5, 0.9)
+        } else if hp > 25.0 {
+            Color::srgba(0.95, 0.75, 0.35, 0.9)
+        } else {
+            Color::srgba(0.95, 0.35, 0.35, 0.95)
+        };
+    }
     if state.won {
         **t = format!(
-            "Escaped! Falls: {}  Crows shot: {}",
-            state.deaths, combat.kills
+            "Escaped! HP: {:.0}%  Falls: {}  Crows shot: {}",
+            hp, state.deaths, combat.kills
         );
     } else {
         **t = format!(
-            "Reach the red flag. Falls: {}  Crows shot: {}  Hits taken: {}",
-            state.deaths, combat.kills, combat.hits
+            "Reach the red flag. HP: {:.0}%  Falls: {}  Crows shot: {}  Hits: {}",
+            hp, state.deaths, combat.kills, combat.hits
         );
     }
 }
