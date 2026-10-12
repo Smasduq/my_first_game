@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::level::{LevelState, SpawnPoint};
+use crate::level::{LevelState, SpawnPoint, difficulty_for};
 use crate::menu::{GameState, SfxEnabled};
 use crate::player::{FacingLR, Health, Player, Velocity, muzzle_offset};
 
@@ -13,14 +13,14 @@ pub struct CombatStats {
 
 /// A flying eye demon homing in on the player.
 #[derive(Component)]
-pub(crate) struct Eye {
+pub struct Eye {
     vel: Vec2,
     phase: f32,
 }
 
 /// Bullet in flight.
 #[derive(Component)]
-pub(crate) struct Bullet {
+pub struct Bullet {
     vel: Vec2,
 }
 
@@ -47,19 +47,16 @@ struct CombatAssets {
 
 /// Short-lived flash/spark, despawned by `despawn_after`.
 #[derive(Component)]
-pub(crate) struct Life {
+pub struct Life {
     timer: Timer,
 }
 
 #[derive(Component)]
-struct Impact {
+pub struct Impact {
     timer: Timer,
 }
 
-const EYE_SPEED: f32 = 150.0;
 const BULLET_SPEED: f32 = 750.0;
-const EYE_DAMAGE: f32 = 9.0;
-const MAX_EYES: usize = 8;
 
 pub struct CombatPlugin;
 
@@ -67,7 +64,10 @@ impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(CombatStats::default())
             .insert_resource(EyeSpawner {
-                timer: Timer::from_seconds(2.5, TimerMode::Repeating),
+                timer: Timer::from_seconds(
+                    difficulty_for(1).eye_interval,
+                    TimerMode::Repeating,
+                ),
                 count: 0,
             })
             .insert_resource(FireCooldown {
@@ -132,11 +132,18 @@ fn spawn_eyes(
     if state.won {
         return;
     }
+    // Difficulty follows the current level: faster spawns, more eyes,
+    // quicker chasers on later levels.
+    let diff = difficulty_for(state.current);
+    let want = std::time::Duration::from_secs_f32(diff.eye_interval);
+    if spawner.timer.duration() != want {
+        spawner.timer.set_duration(want);
+    }
     spawner.timer.tick(time.delta());
     if !spawner.timer.just_finished() {
         return;
     }
-    if eyes.iter().len() >= MAX_EYES {
+    if eyes.iter().len() >= diff.max_eyes {
         return;
     }
     let (Ok(p), Ok(cam)) = (player.single(), camera.single()) else {
@@ -161,7 +168,7 @@ fn spawn_eyes(
 
     commands.spawn((
         Eye {
-            vel: dir * EYE_SPEED,
+            vel: dir * diff.eye_speed,
             phase: spawner.count as f32,
         },
         Sprite {
@@ -248,6 +255,7 @@ fn move_eyes(
     mut eyes: Query<(&mut Transform, &mut Eye), (Without<Camera>, Without<Player>)>,
 ) {
     let dt = time.delta_secs();
+    let speed = difficulty_for(state.current).eye_speed;
     let target = player.single().ok().map(|t| t.translation.truncate());
     for (mut t, mut e) in &mut eyes {
         // Steer toward the player so eyes genuinely chase instead of
@@ -257,7 +265,7 @@ fn move_eyes(
         {
             let to = tp - t.translation.truncate();
             if to.length_squared() > 1.0 {
-                let desired = to.normalize() * EYE_SPEED;
+                let desired = to.normalize() * speed;
                 let k = 1.0 - (-2.0 * dt).exp();
                 e.vel = e.vel.lerp(desired, k);
             }
@@ -386,6 +394,7 @@ fn eye_hits_player(
         return;
     };
     health.invuln.tick(time.delta());
+    let damage = difficulty_for(state.current).eye_damage;
     for (ee, et) in &eyes {
         let dx = (t.translation.x - et.translation.x).abs();
         let dy = (t.translation.y - et.translation.y).abs();
@@ -398,7 +407,7 @@ fn eye_hits_player(
             continue;
         }
         health.invuln.reset();
-        health.hp -= EYE_DAMAGE;
+        health.hp -= damage;
         stats.hits += 1;
         commands.spawn((
             Impact {
@@ -505,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn eye_touch_damages_player_by_nine() {
+    fn eye_touch_damages_player_per_level() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.add_plugins(bevy::input::InputPlugin);
@@ -523,6 +532,8 @@ mod tests {
         for _ in 0..10 {
             app.update();
         }
+
+        let expected = difficulty_for(app.world().resource::<LevelState>().current).eye_damage;
 
         let player_pos = app
             .world_mut()
@@ -554,7 +565,7 @@ mod tests {
             .expect("player health")
             .hp;
         let stats = app.world().resource::<CombatStats>();
-        assert_eq!(hp_before - hp_after, EYE_DAMAGE, "eye hit is -9% HP");
+        assert_eq!(hp_before - hp_after, expected, "eye hit matches level damage");
         assert_eq!(stats.hits, 1);
         // Velocity access keeps the import used on all platforms.
         let _ = app

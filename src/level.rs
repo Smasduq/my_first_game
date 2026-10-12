@@ -1,5 +1,9 @@
 use bevy::prelude::*;
 
+use crate::combat::{Bullet, Eye, Impact, Life};
+use crate::menu::{GameState, SfxEnabled};
+use crate::player::{Health, Player, Velocity};
+
 /// Solid ground. `size` is full width/height, centered on the Transform.
 #[derive(Component)]
 pub struct Platform {
@@ -14,11 +18,55 @@ pub struct Goal;
 #[derive(Resource)]
 pub struct SpawnPoint(pub Vec3);
 
-/// Deaths + win state.
-#[derive(Resource, Default)]
+/// Marker on everything rebuilt per level (platforms, lips, seams,
+/// goal, trees, lanterns). Background + fog are global and persist.
+#[derive(Component)]
+pub struct LevelGeometry;
+
+/// Total number of levels. Level 1 is easiest, [`MAX_LEVEL`] hardest.
+pub const MAX_LEVEL: u32 = 10;
+
+/// Deaths + win state + current level (1-based).
+#[derive(Resource)]
 pub struct LevelState {
     pub deaths: u32,
     pub won: bool,
+    pub current: u32,
+}
+
+impl Default for LevelState {
+    fn default() -> Self {
+        Self {
+            deaths: 0,
+            won: false,
+            current: 1,
+        }
+    }
+}
+
+/// Per-level enemy pressure. Scales monotonically with level.
+#[derive(Debug, Clone, Copy)]
+pub struct Difficulty {
+    /// Seconds between eye spawns.
+    pub eye_interval: f32,
+    /// Cap on live eyes.
+    pub max_eyes: usize,
+    /// Eye homing speed.
+    pub eye_speed: f32,
+    /// HP lost per eye touch.
+    pub eye_damage: f32,
+}
+
+/// Level 1 is calm, level 10 is relentless. Linear interpolation.
+pub fn difficulty_for(level: u32) -> Difficulty {
+    let l = level.clamp(1, MAX_LEVEL) as f32 - 1.0;
+    let t = l / (MAX_LEVEL as f32 - 1.0);
+    Difficulty {
+        eye_interval: 4.5 - 3.3 * t,
+        max_eyes: (2.0 + 8.0 * t).round() as usize,
+        eye_speed: 110.0 + 110.0 * t,
+        eye_damage: 7.0 + 9.0 * t,
+    }
 }
 
 /// One repeating slice of a parallax background layer.
@@ -44,13 +92,134 @@ struct LanternGlow {
 
 pub const KILL_Y: f32 = -500.0;
 
-/// Platforms as (x_min, x_max, top_y).
-const PLATFORMS: [(f32, f32, f32); 4] = [
+// ---------------------------------------------------------------------------
+// Level layouts: platforms as (x_min, x_max, top_y).
+//
+// Difficulty ramps via wider gaps, narrower platforms, bigger height
+// swings, and longer runs. Jump physics (330 run, 950 jump vel, 2600
+// gravity) clears ~240px flat and ~173px up, so flat gaps top out at
+// 210 and climbs keep gaps <= 150.
+// ---------------------------------------------------------------------------
+
+const L1: &[(f32, f32, f32)] = &[
     (-350.0, 350.0, 0.0),
-    (490.0, 890.0, 0.0),
-    (1050.0, 1400.0, 70.0),
-    (1580.0, 2280.0, 0.0),
+    (450.0, 1050.0, 0.0),
+    (1150.0, 1750.0, 0.0),
 ];
+
+const L2: &[(f32, f32, f32)] = &[
+    (-350.0, 300.0, 0.0),
+    (420.0, 970.0, 0.0),
+    (1090.0, 1590.0, 30.0),
+    (1710.0, 2310.0, 30.0),
+];
+
+const L3: &[(f32, f32, f32)] = &[
+    (-350.0, 250.0, 0.0),
+    (380.0, 930.0, 0.0),
+    (1060.0, 1510.0, 50.0),
+    (1640.0, 2240.0, 20.0),
+];
+
+const L4: &[(f32, f32, f32)] = &[
+    (-350.0, 200.0, 0.0),
+    (340.0, 840.0, 0.0),
+    (980.0, 1430.0, 60.0),
+    (1570.0, 2020.0, 60.0),
+    (2160.0, 2710.0, 20.0),
+];
+
+const L5: &[(f32, f32, f32)] = &[
+    (-350.0, 150.0, 0.0),
+    (300.0, 750.0, 0.0),
+    (900.0, 1300.0, 70.0),
+    (1450.0, 1850.0, 70.0),
+    (2000.0, 2500.0, 30.0),
+];
+
+const L6: &[(f32, f32, f32)] = &[
+    (-350.0, 150.0, 0.0),
+    (310.0, 760.0, 0.0),
+    (920.0, 1320.0, 80.0),
+    (1480.0, 1880.0, 80.0),
+    (2040.0, 2440.0, 40.0),
+    (2600.0, 3050.0, 40.0),
+];
+
+const L7: &[(f32, f32, f32)] = &[
+    (-350.0, 100.0, 0.0),
+    (275.0, 675.0, 0.0),
+    (825.0, 1250.0, 90.0),
+    (1425.0, 1825.0, 90.0),
+    (2000.0, 2400.0, 40.0),
+    (2575.0, 3025.0, 80.0),
+];
+
+const L8: &[(f32, f32, f32)] = &[
+    (-350.0, 50.0, 0.0),
+    (235.0, 635.0, 0.0),
+    (785.0, 1135.0, 60.0),
+    (1285.0, 1685.0, 60.0),
+    (1870.0, 2270.0, 10.0),
+    (2420.0, 2770.0, 70.0),
+    (2920.0, 3320.0, 70.0),
+];
+
+const L9: &[(f32, f32, f32)] = &[
+    (-350.0, 0.0, 0.0),
+    (195.0, 545.0, 0.0),
+    (695.0, 1045.0, 70.0),
+    (1195.0, 1545.0, 70.0),
+    (1740.0, 2090.0, 20.0),
+    (2240.0, 2590.0, 90.0),
+    (2740.0, 3140.0, 90.0),
+];
+
+const L10: &[(f32, f32, f32)] = &[
+    (-350.0, -50.0, 0.0),
+    (160.0, 460.0, 0.0),
+    (610.0, 910.0, 80.0),
+    (1060.0, 1360.0, 80.0),
+    (1570.0, 1870.0, 0.0),
+    (2020.0, 2320.0, 100.0),
+    (2470.0, 2770.0, 100.0),
+    (2980.0, 3330.0, 40.0),
+];
+
+/// Platforms for a 1-based level number (clamped).
+pub fn platforms_for(level: u32) -> &'static [(f32, f32, f32)] {
+    match level.clamp(1, MAX_LEVEL) {
+        1 => L1,
+        2 => L2,
+        3 => L3,
+        4 => L4,
+        5 => L5,
+        6 => L6,
+        7 => L7,
+        8 => L8,
+        9 => L9,
+        _ => L10,
+    }
+}
+
+/// Player spawn for a level: above the start of the first platform.
+pub fn spawn_for(level: u32) -> Vec3 {
+    let (x_min, _, top) = platforms_for(level)[0];
+    Vec3::new(x_min + 100.0, top + 150.0, 0.0)
+}
+
+/// Flag pole sits near the end of the last platform.
+pub fn goal_x_for(level: u32) -> f32 {
+    let plats = platforms_for(level);
+    let (_, x_max, _) = plats[plats.len() - 1];
+    x_max - 80.0
+}
+
+/// Top surface of the last platform (pole base height).
+pub fn goal_top_for(level: u32) -> f32 {
+    let plats = platforms_for(level);
+    plats[plats.len() - 1].2
+}
 
 /// (asset path, pixel width, parallax factor, z).
 /// All Mountain Dusk A layers are 240px tall; drawn at 4x with nearest filter.
@@ -101,34 +270,71 @@ pub struct LevelPlugin;
 
 impl Plugin for LevelPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(SpawnPoint(Vec3::new(-250.0, 150.0, 0.0)))
+        app.insert_resource(SpawnPoint(spawn_for(1)))
             .insert_resource(LevelState::default())
             .add_systems(
                 Startup,
                 (
-                    spawn_platforms,
-                    spawn_goal,
+                    build_initial_level,
                     spawn_background,
-                    spawn_trees,
-                    spawn_lanterns,
                     spawn_fog,
                 ),
             )
-            .add_systems(Update, (scroll_background, drift_fog, flicker_lanterns));
+            .add_systems(
+                Update,
+                (
+                    scroll_background,
+                    drift_fog,
+                    flicker_lanterns,
+                    advance_on_goal,
+                )
+                    .run_if(in_state(GameState::Playing)),
+            )
+            // Ambient systems also run while paused so the menu backdrop lives.
+            .add_systems(
+                Update,
+                (scroll_background, drift_fog, flicker_lanterns)
+                    .run_if(in_state(GameState::Menu)),
+            );
     }
 }
 
-fn spawn_platforms(mut commands: Commands) {
+fn build_initial_level(mut commands: Commands) {
+    build_level_geometry(&mut commands, 1);
+}
+
+/// Spawn platforms + goal + decor for `level`, tagging all of it so a
+/// level transition can despawn it in one query.
+pub fn build_level_geometry(commands: &mut Commands, level: u32) {
+    spawn_platforms_for(commands, level);
+    spawn_goal_for(commands, level);
+    spawn_trees_for(commands, level);
+    spawn_lanterns_for(commands, level);
+}
+
+/// Despawn everything tagged [`LevelGeometry`].
+pub fn clear_level_geometry(
+    commands: &mut Commands,
+    geometry: &[Entity],
+) {
+    for e in geometry {
+        commands.entity(*e).despawn();
+    }
+}
+
+fn spawn_platforms_for(commands: &mut Commands, level: u32) {
     // Mountain Dusk palette: near-black purple rock, sunlit red-orange lip.
     let ground = Color::srgb(0.10, 0.06, 0.15);
     let under_lip = Color::srgb(0.05, 0.03, 0.08);
     let edge = Color::srgb(0.52, 0.21, 0.19);
 
-    for (x_min, x_max, top) in PLATFORMS {
+    for (x_min, x_max, top) in platforms_for(level) {
+        let (x_min, x_max, top) = (*x_min, *x_max, *top);
         let w = x_max - x_min;
         let cx = (x_min + x_max) * 0.5;
         let h = 90.0;
         commands.spawn((
+            LevelGeometry,
             Platform {
                 size: Vec2::new(w, h),
             },
@@ -141,6 +347,7 @@ fn spawn_platforms(mut commands: Commands) {
         ));
         // Sunlit top lip plus a dark under-shadow for pixel-art depth.
         commands.spawn((
+            LevelGeometry,
             Sprite {
                 color: edge,
                 custom_size: Some(Vec2::new(w, 8.0)),
@@ -149,6 +356,7 @@ fn spawn_platforms(mut commands: Commands) {
             Transform::from_xyz(cx, top - 4.0, 0.5),
         ));
         commands.spawn((
+            LevelGeometry,
             Sprite {
                 color: under_lip,
                 custom_size: Some(Vec2::new(w, 6.0)),
@@ -162,6 +370,7 @@ fn spawn_platforms(mut commands: Commands) {
         while seam_x < x_max - 32.0 {
             let seam_height = 24.0 + (seam_index % 3) as f32 * 8.0;
             commands.spawn((
+                LevelGeometry,
                 Sprite {
                     color: Color::srgb(0.13, 0.08, 0.17),
                     custom_size: Some(Vec2::new(3.0, seam_height)),
@@ -170,6 +379,7 @@ fn spawn_platforms(mut commands: Commands) {
                 Transform::from_xyz(seam_x, top - 30.0, 0.6),
             ));
             commands.spawn((
+                LevelGeometry,
                 Sprite {
                     color: Color::srgb(0.16, 0.09, 0.17),
                     custom_size: Some(Vec2::new(18.0, 2.0)),
@@ -183,11 +393,12 @@ fn spawn_platforms(mut commands: Commands) {
     }
 }
 
-fn spawn_goal(mut commands: Commands) {
-    let goal_x = 2200.0;
-    let top = 0.0;
+fn spawn_goal_for(commands: &mut Commands, level: u32) {
+    let goal_x = goal_x_for(level);
+    let top = goal_top_for(level);
     // Pole.
     commands.spawn((
+        LevelGeometry,
         Sprite {
             color: Color::srgb(0.6, 0.58, 0.55),
             custom_size: Some(Vec2::new(8.0, 170.0)),
@@ -197,6 +408,7 @@ fn spawn_goal(mut commands: Commands) {
     ));
     // Banner.
     commands.spawn((
+        LevelGeometry,
         Goal,
         Sprite {
             color: Color::srgb(0.55, 0.12, 0.14),
@@ -206,8 +418,13 @@ fn spawn_goal(mut commands: Commands) {
         Transform::from_xyz(goal_x + 39.0, top + 148.0, 1.0),
     ));
     commands.spawn((
+        LevelGeometry,
         Goal,
-        Text2d::new("ESCAPE"),
+        Text2d::new(if level >= MAX_LEVEL {
+            "ESCAPE"
+        } else {
+            "NEXT"
+        }),
         TextFont {
             font_size: FontSize::Px(22.0),
             ..default()
@@ -215,6 +432,76 @@ fn spawn_goal(mut commands: Commands) {
         TextColor(Color::srgb(0.9, 0.75, 0.75)),
         Transform::from_xyz(goal_x + 39.0, top + 148.0, 2.0),
     ));
+}
+
+/// Touching the banner advances to the next level, or wins the run on
+/// the last level. Eyes/bullets are cleared and the player respawns
+/// fresh (full HP) at the next level's start.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
+fn advance_on_goal(
+    mut commands: Commands,
+    audio: Res<AssetServer>,
+    sfx: Res<SfxEnabled>,
+    mut player: Query<(&mut Transform, &mut Velocity, &mut Health), With<Player>>,
+    goals: Query<&Transform, (With<Goal>, Without<Player>)>,
+    mut state: ResMut<LevelState>,
+    mut spawn: ResMut<SpawnPoint>,
+    geometry: Query<Entity, With<LevelGeometry>>,
+    eyes: Query<Entity, With<Eye>>,
+    bullets: Query<Entity, With<Bullet>>,
+    fx: Query<Entity, Or<(With<Life>, With<Impact>)>>,
+) {
+    if state.won {
+        return;
+    }
+    let reached = {
+        let Ok((p, _, _)) = player.single() else {
+            return;
+        };
+        goals.iter().any(|g| {
+            // Generous banner hitbox.
+            (p.translation.x - g.translation.x).abs() < 60.0
+                && (p.translation.y - g.translation.y).abs() < 110.0
+        })
+    };
+    if !reached {
+        return;
+    }
+
+    if state.current >= MAX_LEVEL {
+        state.won = true;
+        if sfx.0 {
+            commands.spawn(AudioPlayer::new(
+                audio.load("10_Battle_SFX/55_Encounter_02.ogg"),
+            ));
+        }
+        return;
+    }
+
+    // Next level.
+    let next = state.current + 1;
+    state.current = next;
+    let entities: Vec<Entity> = geometry.iter().collect();
+    clear_level_geometry(&mut commands, &entities);
+    for e in eyes.iter().chain(bullets.iter()) {
+        commands.entity(e).despawn();
+    }
+    for e in &fx {
+        commands.entity(e).despawn();
+    }
+    build_level_geometry(&mut commands, next);
+    spawn.0 = spawn_for(next);
+    if let Ok((mut t, mut v, mut h)) = player.single_mut() {
+        t.translation = spawn.0;
+        v.0 = Vec2::ZERO;
+        *h = Health::full();
+    }
+    if sfx.0 {
+        commands.spawn(AudioPlayer::new(
+            audio.load("10_Battle_SFX/55_Encounter_02.ogg"),
+        ));
+    }
 }
 
 /// Real art background: Mountain Dusk A layers, tiled around the camera.
@@ -264,41 +551,51 @@ fn scroll_background(
     }
 }
 
-/// Black dead-tree silhouettes on the platforms (foreground depth over the art).
-fn spawn_trees(mut commands: Commands) {
+/// Black dead-tree silhouettes derived from the current level's
+/// platforms (foreground depth over the art).
+fn spawn_trees_for(commands: &mut Commands, level: u32) {
     let black = Color::srgb(0.008, 0.008, 0.015);
-
-    let tree_x = [-200.0, 150.0, 620.0, 800.0, 1180.0, 1700.0, 2050.0];
-    for (i, x) in tree_x.iter().enumerate() {
-        let top = if (1000.0..1450.0).contains(x) {
-            70.0
-        } else {
-            0.0
-        };
-        let h_var = 110.0 + (i as f32 % 3.0) * 25.0;
-        // Trunk.
-        commands.spawn((
-            Sprite {
-                color: black,
-                custom_size: Some(Vec2::new(12.0, h_var)),
-                ..default()
-            },
-            Transform::from_xyz(*x, top + h_var * 0.5, -5.0),
-        ));
-        // Two branches.
-        for (side, ang) in [(-1.0, 0.6), (1.0, -0.55)] {
+    let plats = platforms_for(level);
+    // One or two trees per platform depending on width.
+    let mut i = 0;
+    for (x_min, x_max, top) in plats.iter().copied() {
+        let w = x_max - x_min;
+        let mut xs = vec![(x_min + x_max) * 0.5 - 60.0];
+        if w > 450.0 {
+            xs.push(x_min + w * 0.75);
+        }
+        for x in xs {
+            if (x - goal_x_for(level)).abs() < 90.0 {
+                continue;
+            }
+            let h_var = 110.0 + (i as f32 % 3.0) * 25.0;
+            // Trunk.
             commands.spawn((
+                LevelGeometry,
                 Sprite {
                     color: black,
-                    custom_size: Some(Vec2::new(8.0, 55.0)),
+                    custom_size: Some(Vec2::new(12.0, h_var)),
                     ..default()
                 },
-                Transform {
-                    translation: Vec3::new(*x + side * 16.0, top + h_var - 20.0, -5.0),
-                    rotation: Quat::from_rotation_z(ang * side),
-                    ..default()
-                },
+                Transform::from_xyz(x, top + h_var * 0.5, -5.0),
             ));
+            // Two branches.
+            for (side, ang) in [(-1.0, 0.6), (1.0, -0.55)] {
+                commands.spawn((
+                    LevelGeometry,
+                    Sprite {
+                        color: black,
+                        custom_size: Some(Vec2::new(8.0, 55.0)),
+                        ..default()
+                    },
+                    Transform {
+                        translation: Vec3::new(x + side * 16.0, top + h_var - 20.0, -5.0),
+                        rotation: Quat::from_rotation_z(ang * side),
+                        ..default()
+                    },
+                ));
+            }
+            i += 1;
         }
     }
 }
@@ -307,6 +604,7 @@ fn spawn_fog(mut commands: Commands) {
     let fog = Color::srgba(0.45, 0.45, 0.55, 0.07);
     let xs = [
         -500.0, -200.0, 100.0, 420.0, 700.0, 1000.0, 1300.0, 1600.0, 1900.0, 2200.0,
+        2500.0, 2800.0, 3100.0,
     ];
     for (i, x) in xs.iter().enumerate() {
         commands.spawn((
@@ -323,13 +621,17 @@ fn spawn_fog(mut commands: Commands) {
     }
 }
 
-fn spawn_lanterns(mut commands: Commands) {
-    for (i, (x, top)) in [(190.0, 0.0), (720.0, 0.0), (1260.0, 70.0), (1860.0, 0.0)]
-        .into_iter()
-        .enumerate()
-    {
+fn spawn_lanterns_for(commands: &mut Commands, level: u32) {
+    let plats = platforms_for(level);
+    // One lantern near the middle of each platform.
+    for (i, (x_min, x_max, top)) in plats.iter().copied().enumerate() {
+        let x = (x_min + x_max) * 0.5;
+        if (x - goal_x_for(level)).abs() < 60.0 {
+            continue;
+        }
         let metal = Color::srgb(0.11, 0.08, 0.12);
         commands.spawn((
+            LevelGeometry,
             Sprite {
                 color: metal,
                 custom_size: Some(Vec2::new(5.0, 30.0)),
@@ -338,6 +640,7 @@ fn spawn_lanterns(mut commands: Commands) {
             Transform::from_xyz(x, top + 15.0, 2.0),
         ));
         commands.spawn((
+            LevelGeometry,
             Sprite {
                 color: metal,
                 custom_size: Some(Vec2::new(18.0, 4.0)),
@@ -346,6 +649,7 @@ fn spawn_lanterns(mut commands: Commands) {
             Transform::from_xyz(x, top + 29.0, 2.0),
         ));
         commands.spawn((
+            LevelGeometry,
             LanternGlow {
                 phase: i as f32 * 1.7,
             },
@@ -357,6 +661,7 @@ fn spawn_lanterns(mut commands: Commands) {
             Transform::from_xyz(x, top + 38.0, 2.1),
         ));
         commands.spawn((
+            LevelGeometry,
             Sprite {
                 color: Color::srgb(0.96, 0.61, 0.24),
                 custom_size: Some(Vec2::new(9.0, 14.0)),
@@ -365,6 +670,7 @@ fn spawn_lanterns(mut commands: Commands) {
             Transform::from_xyz(x, top + 38.0, 2.2),
         ));
         commands.spawn((
+            LevelGeometry,
             Sprite {
                 color: Color::srgb(0.21, 0.12, 0.15),
                 custom_size: Some(Vec2::new(15.0, 3.0)),
@@ -393,5 +699,67 @@ fn drift_fog(
         if t.translation.x < cam.translation.x - 750.0 {
             t.translation.x += 1500.0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ten_levels_exist_and_ramp_up() {
+        assert_eq!(MAX_LEVEL, 10);
+        for level in 1..=MAX_LEVEL {
+            assert!(!platforms_for(level).is_empty(), "level {level} has geometry");
+            assert!(
+                goal_x_for(level) > spawn_for(level).x,
+                "level {level} goal is ahead of spawn"
+            );
+        }
+    }
+
+    #[test]
+    fn gaps_stay_beatable() {
+        // Flat/drop gaps must stay within the ~240px jump range;
+        // climbs keep gaps small enough for the ~173px jump height.
+        for level in 1..=MAX_LEVEL {
+            let plats = platforms_for(level);
+            for w in plats.windows(2) {
+                let (_, prev_max, prev_top) = w[0];
+                let (next_min, _, next_top) = w[1];
+                let gap = next_min - prev_max;
+                let climb = next_top - prev_top;
+                assert!(gap <= 215.0, "L{level} gap {gap} too wide");
+                assert!(gap >= 60.0, "L{level} gap {gap} trivial");
+                if climb > 50.0 {
+                    assert!(
+                        gap <= 160.0,
+                        "L{level} climb {climb} with gap {gap} too hard"
+                    );
+                }
+                assert!(climb <= 100.0, "L{level} climb {climb} too high");
+            }
+        }
+    }
+
+    #[test]
+    fn difficulty_ramps_monotonically() {
+        let mut prev: Option<Difficulty> = None;
+        for level in 1..=MAX_LEVEL {
+            let d = difficulty_for(level);
+            if let Some(p) = prev {
+                assert!(d.eye_interval <= p.eye_interval, "spawn rate ramps");
+                assert!(d.max_eyes >= p.max_eyes, "eye cap ramps");
+                assert!(d.eye_speed >= p.eye_speed, "eye speed ramps");
+                assert!(d.eye_damage >= p.eye_damage, "eye damage ramps");
+            }
+            prev = Some(d);
+        }
+        let easy = difficulty_for(1);
+        let hard = difficulty_for(10);
+        assert!(easy.eye_interval > hard.eye_interval);
+        assert!(easy.max_eyes < hard.max_eyes);
+        assert!(easy.eye_speed < hard.eye_speed);
+        assert!(easy.eye_damage < hard.eye_damage);
     }
 }

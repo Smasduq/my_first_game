@@ -7,7 +7,7 @@ mod menu;
 mod player;
 
 use combat::{CombatPlugin, CombatStats};
-use level::LevelState;
+use level::{LevelState, MAX_LEVEL};
 use menu::{Hud, MenuPlugin, MusicTrack};
 use player::{Health, Player};
 
@@ -85,7 +85,7 @@ fn setup_ui(mut commands: Commands) {
             position_type: PositionType::Absolute,
             top: Val::Px(14.0),
             left: Val::Px(14.0),
-            width: Val::Px(310.0),
+            width: Val::Px(380.0),
             padding: UiRect::all(Val::Px(14.0)),
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(9.0),
@@ -129,7 +129,7 @@ fn setup_ui(mut commands: Commands) {
             ),
             (
                 StatusText,
-                Text::new("FALLS   0       EYES DOWN   0"),
+                Text::new("LV 1 / 10     FALLS   0       EYES DOWN   0"),
                 TextFont {
                     font_size: FontSize::Px(16.0),
                     ..default()
@@ -255,8 +255,8 @@ fn update_status(
     let hp = health.hp.clamp(0.0, Health::MAX);
     if let Ok(mut t) = text.single_mut() {
         **t = format!(
-            "FALLS   {}       EYES DOWN   {}",
-            state.deaths, combat.kills
+            "LV {} / {}     FALLS   {}       EYES DOWN   {}",
+            state.current, MAX_LEVEL, state.deaths, combat.kills
         );
     }
     if let Ok(mut t) = label.single_mut() {
@@ -287,8 +287,8 @@ fn update_win(
         && let (Ok(health), Ok(mut text)) = (health.single(), summary.single_mut())
     {
         **text = format!(
-            "HEALTH  {:.0}%     FALLS  {}     EYES DOWN  {}",
-            health.hp, state.deaths, combat.kills
+            "CLEARED ALL {} LEVELS     HEALTH  {:.0}%     FALLS  {}     EYES DOWN  {}",
+            MAX_LEVEL, health.hp, state.deaths, combat.kills
         );
     }
 }

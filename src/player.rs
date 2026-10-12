@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::level::{Goal, KILL_Y, LevelState, Platform, SpawnPoint};
+use crate::level::{KILL_Y, LevelState, Platform, SpawnPoint};
 use crate::menu::{GameState, SfxEnabled};
 
 /// Marker for the player entity.
@@ -74,7 +74,6 @@ impl Plugin for PlayerPlugin {
                 run_jump_physics,
                 animate_marine,
                 check_fall,
-                check_goal,
                 restart_on_key,
             )
                 .chain()
@@ -299,34 +298,6 @@ fn check_fall(
             *h = Health::full();
         }
         state.deaths += 1;
-    }
-}
-
-fn check_goal(
-    mut commands: Commands,
-    audio: Res<AssetServer>,
-    sfx: Res<SfxEnabled>,
-    player: Query<&Transform, With<Player>>,
-    goals: Query<&Transform, (With<Goal>, Without<Player>)>,
-    mut state: ResMut<LevelState>,
-) {
-    if state.won {
-        return;
-    }
-    let Ok(p) = player.single() else { return };
-    for g in &goals {
-        // Generous banner hitbox.
-        if (p.translation.x - g.translation.x).abs() < 60.0
-            && (p.translation.y - g.translation.y).abs() < 110.0
-        {
-            state.won = true;
-            if sfx.0 {
-                commands.spawn(AudioPlayer::new(
-                    audio.load("10_Battle_SFX/55_Encounter_02.ogg"),
-                ));
-            }
-            break;
-        }
     }
 }
 
