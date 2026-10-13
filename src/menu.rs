@@ -5,7 +5,7 @@ use bevy::ui::Pressed;
 use bevy::ui_widgets::{Activate, Button, observe};
 
 use crate::combat::{Bullet, CombatStats, Eye, Impact, Life};
-use crate::level::{LevelGeometry, LevelState, SpawnPoint, build_level_geometry, clear_level_geometry, spawn_for};
+use crate::level::{LevelState, SpawnPoint, checkpoint_spawn};
 use crate::player::{Health, Player, Velocity};
 
 /// Top-level flow: menu overlay vs live gameplay.
@@ -171,7 +171,7 @@ fn spawn_panel(commands: &mut Commands, screen: MenuScreen) {
                             TextColor(BLOOD),
                         ),
                         (
-                            Text::new("OUTRUN THE EYES. CLEAR ALL 10 LEVELS."),
+                            Text::new("OUTRUN THE EYES. HIT ALL 10 CHECKPOINTS."),
                             TextFont {
                                 font_size: FontSize::Px(16.0),
                                 ..default()
@@ -273,7 +273,6 @@ fn on_button_activate(
     mut spawn: ResMut<SpawnPoint>,
     mut player: Query<(&mut Transform, &mut Velocity, &mut Health), With<Player>>,
     strays: Query<Entity, Or<(With<Eye>, With<Bullet>, With<Life>, With<Impact>)>>,
-    geometry: Query<Entity, With<LevelGeometry>>,
 ) {
     let Ok(kind) = kinds.get(activate.entity) else {
         return;
@@ -281,14 +280,12 @@ fn on_button_activate(
     // Label text lives in the button's first child.
     match *kind {
         MenuButton::Start => {
-            // Fresh run from level 1: rebuild geometry, reset world.
-            let old: Vec<Entity> = geometry.iter().collect();
-            clear_level_geometry(&mut commands, &old);
+            // Fresh run from the start line. The course persists;
+            // just reset progress and clear leftovers.
             for e in &strays {
                 commands.entity(e).despawn();
             }
-            build_level_geometry(&mut commands, 1);
-            spawn.0 = spawn_for(1);
+            spawn.0 = checkpoint_spawn(1);
             level.current = 1;
             level.won = false;
             level.deaths = 0;

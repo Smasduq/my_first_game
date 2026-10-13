@@ -10,23 +10,31 @@ pub struct Platform {
     pub size: Vec2,
 }
 
-/// Finish flag.
+/// Final finish flag at the end of the last segment.
 #[derive(Component)]
 pub struct Goal;
 
-/// Where the player (re)spawns.
+/// Checkpoint flag at the start of segments 2..=TOTAL_CHECKPOINTS.
+/// Touching one makes it the respawn point. Holds the segment number.
+#[derive(Component)]
+pub struct CheckpointFlag(pub u32);
+
+/// Where the player respawns: the last checkpoint reached.
 #[derive(Resource)]
 pub struct SpawnPoint(pub Vec3);
 
-/// Marker on everything rebuilt per level (platforms, lips, seams,
-/// goal, trees, lanterns). Background + fog are global and persist.
+/// Marker on course geometry (platforms, lips, seams, flags, trees, lanterns).
 #[derive(Component)]
 pub struct LevelGeometry;
 
-/// Total number of levels. Level 1 is easiest, [`MAX_LEVEL`] hardest.
-pub const MAX_LEVEL: u32 = 10;
+/// Total checkpoints in the course. Checkpoint 1 is the start line;
+/// the last segment ends with the ESCAPE flag.
+pub const TOTAL_CHECKPOINTS: u32 = 10;
 
-/// Deaths + win state + current level (1-based).
+/// Flat gap between the end of one segment and the start of the next.
+pub const TRANSITION_GAP: f32 = 120.0;
+
+/// Deaths + win state + highest checkpoint reached (1-based).
 #[derive(Resource)]
 pub struct LevelState {
     pub deaths: u32,
@@ -44,7 +52,7 @@ impl Default for LevelState {
     }
 }
 
-/// Per-level enemy pressure. Scales monotonically with level.
+/// Per-checkpoint enemy pressure. Scales monotonically down the course.
 #[derive(Debug, Clone, Copy)]
 pub struct Difficulty {
     /// Seconds between eye spawns.
@@ -57,10 +65,10 @@ pub struct Difficulty {
     pub eye_damage: f32,
 }
 
-/// Level 1 is calm, level 10 is relentless. Linear interpolation.
-pub fn difficulty_for(level: u32) -> Difficulty {
-    let l = level.clamp(1, MAX_LEVEL) as f32 - 1.0;
-    let t = l / (MAX_LEVEL as f32 - 1.0);
+/// Checkpoint 1 is calm, checkpoint 10 is relentless. Linear interpolation.
+pub fn difficulty_for(checkpoint: u32) -> Difficulty {
+    let l = checkpoint.clamp(1, TOTAL_CHECKPOINTS) as f32 - 1.0;
+    let t = l / (TOTAL_CHECKPOINTS as f32 - 1.0);
     Difficulty {
         eye_interval: 4.5 - 3.3 * t,
         max_eyes: (2.0 + 8.0 * t).round() as usize,
@@ -93,11 +101,10 @@ struct LanternGlow {
 pub const KILL_Y: f32 = -500.0;
 
 // ---------------------------------------------------------------------------
-// Level layouts: platforms as (x_min, x_max, top_y).
-//
-// Difficulty ramps via wider gaps, narrower platforms, bigger height
-// swings, and longer runs. Jump physics (330 run, 950 jump vel, 2600
-// gravity) clears ~240px flat and ~173px up, so flat gaps top out at
+// Course segments: platforms as (x_min, x_max, top_y) in segment-local
+// coordinates. Segments are laid end-to-end with TRANSITION_GAP between
+// them, easiest first, hardest last. Jump physics (330 run, 950 jump vel,
+// 2600 gravity) clears ~240px flat and ~173px up, so flat gaps top out at
 // 210 and climbs keep gaps <= 150.
 // ---------------------------------------------------------------------------
 
@@ -186,9 +193,9 @@ const L10: &[(f32, f32, f32)] = &[
     (2980.0, 3330.0, 40.0),
 ];
 
-/// Platforms for a 1-based level number (clamped).
-pub fn platforms_for(level: u32) -> &'static [(f32, f32, f32)] {
-    match level.clamp(1, MAX_LEVEL) {
+/// Segment-local platforms for a 1-based segment number (clamped).
+pub fn platforms_for(segment: u32) -> &'static [(f32, f32, f32)] {
+    match segment.clamp(1, TOTAL_CHECKPOINTS) {
         1 => L1,
         2 => L2,
         3 => L3,
@@ -202,23 +209,52 @@ pub fn platforms_for(level: u32) -> &'static [(f32, f32, f32)] {
     }
 }
 
-/// Player spawn for a level: above the start of the first platform.
-pub fn spawn_for(level: u32) -> Vec3 {
-    let (x_min, _, top) = platforms_for(level)[0];
-    Vec3::new(x_min + 100.0, top + 150.0, 0.0)
+/// World x-offset for a segment so segments tile end-to-end:
+/// each segment starts TRANSITION_GAP past the previous segment's end.
+pub fn segment_offset(segment: u32) -> f32 {
+    let segment = segment.clamp(1, TOTAL_CHECKPOINTS);
+    let mut offset = 0.0;
+    let mut prev_global_end = 0.0;
+    for seg in 1..=segment {
+        let plats = platforms_for(seg);
+        let local_start = plats[0].0;
+        let local_end = plats[plats.len() - 1].1;
+        if seg == 1 {
+            offset = 0.0;
+        } else {
+            offset = prev_global_end + TRANSITION_GAP - local_start;
+        }
+        prev_global_end = offset + local_end;
+    }
+    offset
 }
 
-/// Flag pole sits near the end of the last platform.
-pub fn goal_x_for(level: u32) -> f32 {
-    let plats = platforms_for(level);
-    let (_, x_max, _) = plats[plats.len() - 1];
-    x_max - 80.0
+/// Respawn point for a checkpoint: above the start of its segment.
+pub fn checkpoint_spawn(checkpoint: u32) -> Vec3 {
+    let checkpoint = checkpoint.clamp(1, TOTAL_CHECKPOINTS);
+    let off = segment_offset(checkpoint);
+    let (x_min, _, top) = platforms_for(checkpoint)[0];
+    Vec3::new(off + x_min + 100.0, top + 150.0, 0.0)
 }
 
-/// Top surface of the last platform (pole base height).
-pub fn goal_top_for(level: u32) -> f32 {
-    let plats = platforms_for(level);
-    plats[plats.len() - 1].2
+/// Flag position for checkpoints 2..=TOTAL (banner sits near the
+/// segment start, just past the transition gap). Returns (x, top).
+pub fn checkpoint_flag_pos(checkpoint: u32) -> Option<(f32, f32)> {
+    let checkpoint = checkpoint.clamp(1, TOTAL_CHECKPOINTS);
+    if checkpoint < 2 {
+        return None;
+    }
+    let off = segment_offset(checkpoint);
+    let (x_min, _, top) = platforms_for(checkpoint)[0];
+    Some((off + x_min + 60.0, top))
+}
+
+/// Final ESCAPE flag at the end of the last segment. Returns (x, top).
+pub fn final_goal_pos() -> (f32, f32) {
+    let off = segment_offset(TOTAL_CHECKPOINTS);
+    let plats = platforms_for(TOTAL_CHECKPOINTS);
+    let (_, x_max, top) = plats[plats.len() - 1];
+    (off + x_max - 80.0, top)
 }
 
 /// (asset path, pixel width, parallax factor, z).
@@ -266,27 +302,25 @@ const BG_SCALE: f32 = 4.0;
 /// Half-width of the camera-relative window tiles wrap inside.
 const BG_MARGIN: f32 = 900.0;
 
+/// Pending checkpoint banner vs claimed checkpoint banner.
+const FLAG_PENDING: Color = Color::srgb(0.91, 0.62, 0.26);
+const FLAG_DONE: Color = Color::srgb(0.35, 0.75, 0.40);
+
 pub struct LevelPlugin;
 
 impl Plugin for LevelPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(SpawnPoint(spawn_for(1)))
+        app.insert_resource(SpawnPoint(checkpoint_spawn(1)))
             .insert_resource(LevelState::default())
-            .add_systems(
-                Startup,
-                (
-                    build_initial_level,
-                    spawn_background,
-                    spawn_fog,
-                ),
-            )
+            .add_systems(Startup, (build_course, spawn_background, spawn_fog))
             .add_systems(
                 Update,
                 (
                     scroll_background,
                     drift_fog,
                     flicker_lanterns,
-                    advance_on_goal,
+                    activate_checkpoints,
+                    tint_checkpoint_flags,
                 )
                     .run_if(in_state(GameState::Playing)),
             )
@@ -299,37 +333,29 @@ impl Plugin for LevelPlugin {
     }
 }
 
-fn build_initial_level(mut commands: Commands) {
-    build_level_geometry(&mut commands, 1);
-}
-
-/// Spawn platforms + goal + decor for `level`, tagging all of it so a
-/// level transition can despawn it in one query.
-pub fn build_level_geometry(commands: &mut Commands, level: u32) {
-    spawn_platforms_for(commands, level);
-    spawn_goal_for(commands, level);
-    spawn_trees_for(commands, level);
-    spawn_lanterns_for(commands, level);
-}
-
-/// Despawn everything tagged [`LevelGeometry`].
-pub fn clear_level_geometry(
-    commands: &mut Commands,
-    geometry: &[Entity],
-) {
-    for e in geometry {
-        commands.entity(*e).despawn();
+/// Spawn the whole course once: all segments end-to-end, checkpoint
+/// flags at segments 2..=10, ESCAPE flag at the very end.
+fn build_course(mut commands: Commands) {
+    for seg in 1..=TOTAL_CHECKPOINTS {
+        spawn_platforms_for(&mut commands, seg);
+        spawn_trees_for(&mut commands, seg);
+        spawn_lanterns_for(&mut commands, seg);
+        if seg >= 2 {
+            spawn_checkpoint_flag_for(&mut commands, seg);
+        }
     }
+    spawn_final_goal_for(&mut commands);
 }
 
-fn spawn_platforms_for(commands: &mut Commands, level: u32) {
+fn spawn_platforms_for(commands: &mut Commands, segment: u32) {
     // Mountain Dusk palette: near-black purple rock, sunlit red-orange lip.
     let ground = Color::srgb(0.10, 0.06, 0.15);
     let under_lip = Color::srgb(0.05, 0.03, 0.08);
     let edge = Color::srgb(0.52, 0.21, 0.19);
+    let off = segment_offset(segment);
 
-    for (x_min, x_max, top) in platforms_for(level) {
-        let (x_min, x_max, top) = (*x_min, *x_max, *top);
+    for (x_min, x_max, top) in platforms_for(segment) {
+        let (x_min, x_max, top) = (off + *x_min, off + *x_max, *top);
         let w = x_max - x_min;
         let cx = (x_min + x_max) * 0.5;
         let h = 90.0;
@@ -393,9 +419,46 @@ fn spawn_platforms_for(commands: &mut Commands, level: u32) {
     }
 }
 
-fn spawn_goal_for(commands: &mut Commands, level: u32) {
-    let goal_x = goal_x_for(level);
-    let top = goal_top_for(level);
+fn spawn_checkpoint_flag_for(commands: &mut Commands, checkpoint: u32) {
+    let Some((flag_x, top)) = checkpoint_flag_pos(checkpoint) else {
+        return;
+    };
+    // Pole.
+    commands.spawn((
+        LevelGeometry,
+        Sprite {
+            color: Color::srgb(0.6, 0.58, 0.55),
+            custom_size: Some(Vec2::new(8.0, 170.0)),
+            ..default()
+        },
+        Transform::from_xyz(flag_x, top + 85.0, 1.0),
+    ));
+    // Banner, tinted by claimed state.
+    commands.spawn((
+        LevelGeometry,
+        CheckpointFlag(checkpoint),
+        Sprite {
+            color: FLAG_PENDING,
+            custom_size: Some(Vec2::new(70.0, 44.0)),
+            ..default()
+        },
+        Transform::from_xyz(flag_x + 39.0, top + 148.0, 1.0),
+    ));
+    commands.spawn((
+        LevelGeometry,
+        CheckpointFlag(checkpoint),
+        Text2d::new(checkpoint.to_string()),
+        TextFont {
+            font_size: FontSize::Px(22.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.1, 0.08, 0.1)),
+        Transform::from_xyz(flag_x + 39.0, top + 148.0, 2.0),
+    ));
+}
+
+fn spawn_final_goal_for(commands: &mut Commands) {
+    let (goal_x, top) = final_goal_pos();
     // Pole.
     commands.spawn((
         LevelGeometry,
@@ -420,11 +483,7 @@ fn spawn_goal_for(commands: &mut Commands, level: u32) {
     commands.spawn((
         LevelGeometry,
         Goal,
-        Text2d::new(if level >= MAX_LEVEL {
-            "ESCAPE"
-        } else {
-            "NEXT"
-        }),
+        Text2d::new("ESCAPE"),
         TextFont {
             font_size: FontSize::Px(22.0),
             ..default()
@@ -434,20 +493,25 @@ fn spawn_goal_for(commands: &mut Commands, level: u32) {
     ));
 }
 
-/// Touching the banner advances to the next level, or wins the run on
-/// the last level. Eyes/bullets are cleared and the player respawns
-/// fresh (full HP) at the next level's start.
+fn flag_hit(px: f32, py: f32, gx: f32, gy: f32) -> bool {
+    // Generous banner hitbox.
+    (px - gx).abs() < 60.0 && (py - gy).abs() < 110.0
+}
+
+/// Touching a checkpoint flag claims it: respawn moves there, HP
+/// refills, and pursuers are cleared — the run continues uninterrupted.
+/// Touching the ESCAPE flag wins the run.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
-fn advance_on_goal(
+fn activate_checkpoints(
     mut commands: Commands,
     audio: Res<AssetServer>,
     sfx: Res<SfxEnabled>,
     mut player: Query<(&mut Transform, &mut Velocity, &mut Health), With<Player>>,
+    flags: Query<(&Transform, &CheckpointFlag), Without<Player>>,
     goals: Query<&Transform, (With<Goal>, Without<Player>)>,
     mut state: ResMut<LevelState>,
     mut spawn: ResMut<SpawnPoint>,
-    geometry: Query<Entity, With<LevelGeometry>>,
     eyes: Query<Entity, With<Eye>>,
     bullets: Query<Entity, With<Bullet>>,
     fx: Query<Entity, Or<(With<Life>, With<Impact>)>>,
@@ -455,52 +519,66 @@ fn advance_on_goal(
     if state.won {
         return;
     }
-    let reached = {
+    let (px, py) = {
         let Ok((p, _, _)) = player.single() else {
             return;
         };
-        goals.iter().any(|g| {
-            // Generous banner hitbox.
-            (p.translation.x - g.translation.x).abs() < 60.0
-                && (p.translation.y - g.translation.y).abs() < 110.0
-        })
+        (p.translation.x, p.translation.y)
     };
-    if !reached {
-        return;
-    }
 
-    if state.current >= MAX_LEVEL {
-        state.won = true;
-        if sfx.0 {
-            commands.spawn(AudioPlayer::new(
-                audio.load("10_Battle_SFX/55_Encounter_02.ogg"),
-            ));
+    for g in &goals {
+        if flag_hit(px, py, g.translation.x, g.translation.y) {
+            state.won = true;
+            if sfx.0 {
+                commands.spawn(AudioPlayer::new(
+                    audio.load("10_Battle_SFX/55_Encounter_02.ogg"),
+                ));
+            }
+            return;
         }
-        return;
     }
 
-    // Next level.
-    let next = state.current + 1;
-    state.current = next;
-    let entities: Vec<Entity> = geometry.iter().collect();
-    clear_level_geometry(&mut commands, &entities);
+    // Claim the highest newly-touched checkpoint (normally the next one).
+    let mut best: Option<u32> = None;
+    for (t, flag) in &flags {
+        if flag.0 > state.current
+            && flag_hit(px, py, t.translation.x, t.translation.y)
+            && best.is_none_or(|b| flag.0 > b)
+        {
+            best = Some(flag.0);
+        }
+    }
+    let Some(id) = best else { return };
+    state.current = id;
+    spawn.0 = checkpoint_spawn(id);
+    // Checkpoint breather: full HP, pursuers cleared, momentum kept.
     for e in eyes.iter().chain(bullets.iter()) {
         commands.entity(e).despawn();
     }
     for e in &fx {
         commands.entity(e).despawn();
     }
-    build_level_geometry(&mut commands, next);
-    spawn.0 = spawn_for(next);
-    if let Ok((mut t, mut v, mut h)) = player.single_mut() {
-        t.translation = spawn.0;
-        v.0 = Vec2::ZERO;
+    if let Ok((_, _, mut h)) = player.single_mut() {
         *h = Health::full();
     }
     if sfx.0 {
         commands.spawn(AudioPlayer::new(
             audio.load("10_Battle_SFX/55_Encounter_02.ogg"),
         ));
+    }
+}
+
+/// Claimed checkpoint banners turn green; upcoming ones stay amber.
+fn tint_checkpoint_flags(
+    state: Res<LevelState>,
+    mut banners: Query<(&CheckpointFlag, &mut Sprite)>,
+) {
+    for (flag, mut sprite) in &mut banners {
+        sprite.color = if flag.0 <= state.current {
+            FLAG_DONE
+        } else {
+            FLAG_PENDING
+        };
     }
 }
 
@@ -551,21 +629,36 @@ fn scroll_background(
     }
 }
 
-/// Black dead-tree silhouettes derived from the current level's
-/// platforms (foreground depth over the art).
-fn spawn_trees_for(commands: &mut Commands, level: u32) {
+/// Flag/banner x positions to keep clear of decor within a segment.
+fn decor_avoid_x(segment: u32) -> Vec<f32> {
+    let mut avoid = Vec::new();
+    if let Some((fx, _)) = checkpoint_flag_pos(segment) {
+        avoid.push(fx + 39.0);
+    }
+    if segment == TOTAL_CHECKPOINTS {
+        avoid.push(final_goal_pos().0 + 39.0);
+    }
+    avoid
+}
+
+/// Black dead-tree silhouettes derived from the segment's platforms
+/// (foreground depth over the art).
+fn spawn_trees_for(commands: &mut Commands, segment: u32) {
     let black = Color::srgb(0.008, 0.008, 0.015);
-    let plats = platforms_for(level);
+    let off = segment_offset(segment);
+    let plats = platforms_for(segment);
+    let avoid = decor_avoid_x(segment);
     // One or two trees per platform depending on width.
     let mut i = 0;
     for (x_min, x_max, top) in plats.iter().copied() {
+        let (x_min, x_max) = (off + x_min, off + x_max);
         let w = x_max - x_min;
         let mut xs = vec![(x_min + x_max) * 0.5 - 60.0];
         if w > 450.0 {
             xs.push(x_min + w * 0.75);
         }
         for x in xs {
-            if (x - goal_x_for(level)).abs() < 90.0 {
+            if avoid.iter().any(|a| (x - a).abs() < 90.0) {
                 continue;
             }
             let h_var = 110.0 + (i as f32 % 3.0) * 25.0;
@@ -621,12 +714,14 @@ fn spawn_fog(mut commands: Commands) {
     }
 }
 
-fn spawn_lanterns_for(commands: &mut Commands, level: u32) {
-    let plats = platforms_for(level);
+fn spawn_lanterns_for(commands: &mut Commands, segment: u32) {
+    let off = segment_offset(segment);
+    let plats = platforms_for(segment);
+    let avoid = decor_avoid_x(segment);
     // One lantern near the middle of each platform.
     for (i, (x_min, x_max, top)) in plats.iter().copied().enumerate() {
-        let x = (x_min + x_max) * 0.5;
-        if (x - goal_x_for(level)).abs() < 60.0 {
+        let x = off + (x_min + x_max) * 0.5;
+        if avoid.iter().any(|a| (x - a).abs() < 60.0) {
             continue;
         }
         let metal = Color::srgb(0.11, 0.08, 0.12);
@@ -651,7 +746,7 @@ fn spawn_lanterns_for(commands: &mut Commands, level: u32) {
         commands.spawn((
             LevelGeometry,
             LanternGlow {
-                phase: i as f32 * 1.7,
+                phase: (segment as f32 * 10.0 + i as f32) * 1.7,
             },
             Sprite {
                 color: Color::srgba(0.92, 0.49, 0.15, 0.14),
@@ -707,14 +802,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ten_levels_exist_and_ramp_up() {
-        assert_eq!(MAX_LEVEL, 10);
-        for level in 1..=MAX_LEVEL {
-            assert!(!platforms_for(level).is_empty(), "level {level} has geometry");
+    fn ten_checkpoints_exist_in_order() {
+        assert_eq!(TOTAL_CHECKPOINTS, 10);
+        let mut prev_spawn = f32::NEG_INFINITY;
+        for seg in 1..=TOTAL_CHECKPOINTS {
+            assert!(!platforms_for(seg).is_empty(), "segment {seg} has geometry");
+            let s = checkpoint_spawn(seg);
             assert!(
-                goal_x_for(level) > spawn_for(level).x,
-                "level {level} goal is ahead of spawn"
+                s.x > prev_spawn,
+                "checkpoint {seg} spawn moves forward"
             );
+            prev_spawn = s.x;
+        }
+        let (gx, _) = final_goal_pos();
+        assert!(gx > prev_spawn, "final goal is past the last spawn");
+    }
+
+    #[test]
+    fn checkpoint_flags_sit_inside_their_segments() {
+        assert!(checkpoint_flag_pos(1).is_none());
+        for seg in 2..=TOTAL_CHECKPOINTS {
+            let (fx, _) = checkpoint_flag_pos(seg).expect("flag exists");
+            let plats = platforms_for(seg);
+            let off = segment_offset(seg);
+            let start = off + plats[0].0;
+            let end = off + plats[plats.len() - 1].1;
+            assert!(fx > start && fx < end, "CP{seg} flag inside segment");
+            let s = checkpoint_spawn(seg);
+            assert!(s.x > start && s.x < end, "CP{seg} spawn inside segment");
         }
     }
 
@@ -722,31 +837,49 @@ mod tests {
     fn gaps_stay_beatable() {
         // Flat/drop gaps must stay within the ~240px jump range;
         // climbs keep gaps small enough for the ~173px jump height.
-        for level in 1..=MAX_LEVEL {
-            let plats = platforms_for(level);
+        for seg in 1..=TOTAL_CHECKPOINTS {
+            let plats = platforms_for(seg);
             for w in plats.windows(2) {
                 let (_, prev_max, prev_top) = w[0];
                 let (next_min, _, next_top) = w[1];
                 let gap = next_min - prev_max;
                 let climb = next_top - prev_top;
-                assert!(gap <= 215.0, "L{level} gap {gap} too wide");
-                assert!(gap >= 60.0, "L{level} gap {gap} trivial");
+                assert!(gap <= 215.0, "seg{seg} gap {gap} too wide");
+                assert!(gap >= 60.0, "seg{seg} gap {gap} trivial");
                 if climb > 50.0 {
                     assert!(
                         gap <= 160.0,
-                        "L{level} climb {climb} with gap {gap} too hard"
+                        "seg{seg} climb {climb} with gap {gap} too hard"
                     );
                 }
-                assert!(climb <= 100.0, "L{level} climb {climb} too high");
+                assert!(climb <= 100.0, "seg{seg} climb {climb} too high");
             }
+        }
+        // Transition gaps between segments are short drops/flats.
+        for seg in 1..TOTAL_CHECKPOINTS {
+            let a = platforms_for(seg);
+            let b = platforms_for(seg + 1);
+            let (_, a_end, a_top) = a[a.len() - 1];
+            let (b_start, _, b_top) = b[0];
+            let gap = segment_offset(seg + 1) + b_start - (segment_offset(seg) + a_end);
+            assert!(
+                (gap - TRANSITION_GAP).abs() < 0.01,
+                "transition {seg}->{} is one clean jump",
+                seg + 1
+            );
+            assert!(gap <= 215.0, "transition gap {gap} too wide");
+            assert!(
+                b_top - a_top <= 50.0,
+                "transition must not be a big climb"
+            );
         }
     }
 
     #[test]
     fn difficulty_ramps_monotonically() {
         let mut prev: Option<Difficulty> = None;
-        for level in 1..=MAX_LEVEL {
-            let d = difficulty_for(level);
+        for cp in 1..=TOTAL_CHECKPOINTS {
+            let d = difficulty_for(cp);
             if let Some(p) = prev {
                 assert!(d.eye_interval <= p.eye_interval, "spawn rate ramps");
                 assert!(d.max_eyes >= p.max_eyes, "eye cap ramps");

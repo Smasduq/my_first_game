@@ -388,6 +388,8 @@ fn eye_hits_player(
     mut state: ResMut<LevelState>,
     mut player: Query<(&mut Transform, &mut Velocity, &mut Health), With<Player>>,
     eyes: Query<(Entity, &Transform), (With<Eye>, Without<Player>)>,
+    bullets: Query<Entity, With<Bullet>>,
+    fx: Query<Entity, Or<(With<Life>, With<Impact>)>>,
     mut stats: ResMut<CombatStats>,
 ) {
     let Ok((mut t, mut vel, mut health)) = player.single_mut() else {
@@ -434,10 +436,22 @@ fn eye_hits_player(
             ));
         }
         if health.hp <= 0.0 {
-            // Killed: respawn fresh like a fall.
+            // Killed: revive at the last checkpoint with full HP and a
+            // clear sky so the checkpoint isn't an instant death loop.
             t.translation = spawn.0;
             vel.0 = Vec2::ZERO;
             *health = Health::full();
+            for (ee2, _) in &eyes {
+                if ee2 != ee {
+                    commands.entity(ee2).despawn();
+                }
+            }
+            for b in &bullets {
+                commands.entity(b).despawn();
+            }
+            for e in &fx {
+                commands.entity(e).despawn();
+            }
             state.deaths += 1;
             break;
         }

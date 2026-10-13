@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
-use crate::level::{KILL_Y, LevelState, Platform, SpawnPoint};
+use crate::combat::{Bullet, CombatStats, Eye, Impact, Life};
+use crate::level::{KILL_Y, LevelState, Platform, SpawnPoint, checkpoint_spawn};
 use crate::menu::{GameState, SfxEnabled};
 
 /// Marker for the player entity.
@@ -282,33 +283,71 @@ fn animate_marine(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 fn check_fall(
+    mut commands: Commands,
     mut player: Query<&mut Transform, With<Player>>,
     spawn: Res<SpawnPoint>,
     mut state: ResMut<LevelState>,
     mut stuff: Query<(&mut Velocity, &mut Health), With<Player>>,
+    eyes: Query<Entity, With<Eye>>,
+    bullets: Query<Entity, With<Bullet>>,
+    fx: Query<Entity, Or<(With<Life>, With<Impact>)>>,
 ) {
     let Ok(mut transform) = player.single_mut() else {
         return;
     };
     if transform.translation.y < KILL_Y {
+        // Fell out of the world: revive at the last checkpoint with full HP.
         transform.translation = spawn.0;
         if let Ok((mut v, mut h)) = stuff.single_mut() {
             v.0 = Vec2::ZERO;
             *h = Health::full();
         }
+        for e in eyes.iter().chain(bullets.iter()) {
+            commands.entity(e).despawn();
+        }
+        for e in &fx {
+            commands.entity(e).despawn();
+        }
         state.deaths += 1;
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 fn restart_on_key(
     input: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
     mut player: Query<&mut Transform, With<Player>>,
     mut stuff: Query<(&mut Velocity, &mut Health), With<Player>>,
-    spawn: Res<SpawnPoint>,
+    mut spawn: ResMut<SpawnPoint>,
     mut state: ResMut<LevelState>,
+    mut stats: ResMut<CombatStats>,
+    eyes: Query<Entity, With<Eye>>,
+    bullets: Query<Entity, With<Bullet>>,
+    fx: Query<Entity, Or<(With<Life>, With<Impact>)>>,
 ) {
     if input.just_pressed(KeyCode::KeyR) {
+        if state.won {
+            // Run again from the start line.
+            state.current = 1;
+            state.deaths = 0;
+            state.won = false;
+            stats.kills = 0;
+            stats.hits = 0;
+            spawn.0 = checkpoint_spawn(1);
+        } else {
+            // Mid-run: back to the last checkpoint.
+            state.won = false;
+        }
+        for e in eyes.iter().chain(bullets.iter()) {
+            commands.entity(e).despawn();
+        }
+        for e in &fx {
+            commands.entity(e).despawn();
+        }
         if let Ok(mut t) = player.single_mut() {
             t.translation = spawn.0;
         }
@@ -316,6 +355,5 @@ fn restart_on_key(
             v.0 = Vec2::ZERO;
             *h = Health::full();
         }
-        state.won = false;
     }
 }
